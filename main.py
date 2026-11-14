@@ -257,13 +257,12 @@ def build_grounded_fallback(
         )
     else:
         status_line = (
-            "Flame extinction predicted. A flame on the tested PMMA material is expected to die out "
-            "under these conditions. Check for remaining smoke, smoldering, and hot spots."
+            "No sustained fire predicted for the tested PMMA material under these conditions. "
+            "No immediate action is indicated by this prediction."
         )
         actions = (
-            "1. Keep ventilation steady—do not suddenly crank up fan speeds, which could push fresh oxygen onto a hot surface and reignite it.\n"
-            "2. Inspect the area for lingering smoke, toxic fumes, or hot spots, since microgravity fires can still smolder without a visible flame.\n"
-            "3. Power down any suspected faulty hardware and log the cabin sensor readings."
+            "A precautionary check for smoke, smoldering, or hot spots is optional. "
+            "An actual alarm, smoke, or visible flame still requires the spacecraft fire procedure."
         )
 
     return (
@@ -455,7 +454,8 @@ async def briefing_endpoint(req: TelemetryRequest) -> Dict[str, Any]:
         "6. Use exactly two short headings: 'What Is Happening in the Spacecraft' and 'Astronaut Actions'.\n"
         "7. Actions MUST match the supplied outcome. For sustained burning, prioritize immediate response to "
         "an ongoing fire under the spacecraft fire procedure; do not give routine monitoring as the only response. "
-        "For extinction, focus on residual smoke, smoldering, and hot spots. Do not invent fan settings or "
+        "For extinction, say no immediate action is indicated by the prediction and a precautionary check is optional; "
+        "do not prescribe three mandatory actions. Do not invent fan settings or "
         "vehicle-specific emergency commands; defer those to the spacecraft procedure."
     )
 
@@ -507,7 +507,10 @@ async def briefing_endpoint(req: TelemetryRequest) -> Dict[str, Any]:
         sections = content.split("Astronaut Actions", 1)
         if len(sections) != 2:
             raise ValueError("Briefing missing Astronaut Actions section")
-        content = fallback_text.split("Astronaut Actions", 1)[0] + "Astronaut Actions" + sections[1]
+        content = (
+            fallback_text if predicted_state == 0 else
+            fallback_text.split("Astronaut Actions", 1)[0] + "Astronaut Actions" + sections[1]
+        )
 
         return {
             "status": "supported",
