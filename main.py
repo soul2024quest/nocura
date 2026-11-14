@@ -98,4 +98,433 @@ PSI_INVESTIGATIONS: List[Dict[str, Any]] = [
         "oxygen_range_percent": [14.0, 21.0],
         "flow_velocity_range_cms": [0.0, 5.0],
         "flow_regime": "Quiescent microgravity spherical droplet combustion with CO2/He/N2 diluents",
-        "primary_sensors": ["Multi-user Droplet Combustion Apparatus (MDCA)", "
+        "primary_sensors": ["Multi-user Droplet Combustion Apparatus (MDCA)", "UV/IR radiometers", "High-speed cameras"],
+        "key_findings": (
+            "Measured limiting oxygen indices and inert gas suppression concentrations (CO2 vs. He) in microgravity, "
+            "discovering low-temperature cool-flame burning regimes after visible flame extinction."
+        ),
+        "citation": "Dietrich, Nayagam, Williams et al., NASA Glenn Research Center (PSI FLEX Archive)",
+        "source_url": "https://psi.nasa.gov/",
+        "fire_safety_relevance_score": 0.88,
+    },
+]
+
+app = FastAPI(
+    title="NOCURA Microgravity Combustion & PSI Research API",
+    version=ARTIFACTS.get("model_version", "2.2.0-bass2-logflow"),
+    description="Edge-aligned BASS-II PMMA flame-sustainment estimator and NASA PSI investigation catalog.",
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=CORS_ORIGINS,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+class TelemetryRequest(BaseModel):
+    ambient_o2_percent: float = Field(..., description="Ambient oxygen mole fraction (%)")
+    flow_velocity_cms: float = Field(..., description="Forced convective airflow velocity (cm/s)")
+    fuel_thickness_mm: Optional[float] = Field(
+        default=6.35,
+        description="Fuel rod diameter in mm; model strictly supports 6.35 mm (1/4 in) cast PMMA baseline",
+    )
+
+    @field_validator("ambient_o2_percent", "flow_velocity_cms")
+    @classmethod
+    def check_finite(cls, v: float) -> float:
+        if not math.isfinite(v):
+            raise ValueError("Telemetry inputs must be finite real numbers.")
+        return v
+
+    @field_validator("fuel_thickness_mm")
+    @classmethod
+    def check_fuel_finite(cls, v: Optional[float]) -> Optional[float]:
+        if v is not None and not math.isfinite(v):
+            raise ValueError("fuel_thickness_mm must be a finite real number.")
+        return v
+
+
+def validate_supported_envelope(req: TelemetryRequest) -> List[str]:
+    """Return list of out-of-envelope violations if inputs exceed supported experimental scope."""
+    violations: List[str] = []
+    if req.fuel_thickness_mm is not None and abs(req.fuel_thickness_mm - SUPPORTED_FUEL_MM) > 1e-3:
+        violations.append(
+            f"Unsupported fuel_thickness_mm={req.fuel_thickness_mm} mm. "
+            f"Model is calibrated exclusively for {SUPPORTED_FUEL_MM} mm (1/4 in) cast PMMA rods."
+        )
+    if req.ambient_o2_percent < O2_MIN or req.ambient_o2_percent > O2_MAX:
+        violations.append(
+            f"ambient_o2_percent={req.ambient_o2_percent}% is outside the verified BASS-II PMMA "
+            f"experimental range ({O2_MIN}% to {O2_MAX}%)."
+        )
+    if req.flow_velocity_cms < FLOW_MIN or req.flow_velocity_cms > FLOW_MAX:
+        violations.append(
+            f"flow_velocity_cms={req.flow_velocity_cms} cm/s is outside the verified BASS-II PMMA "
+            f"experimental range ({FLOW_MIN} to {FLOW_MAX} cm/s)."
+        )
+    return violations
+
+
+def compute_sustained_flame_score(ambient_o2_percent: float, flow_velocity_cms: float) -> float:
+    """
+    Pure-Python forward pass matching train.py preprocessing and CombustionResNet weights:
+    - Feature 0: raw ambient_o2_percent
+    - Feature 1: log10(max(flow_velocity_cms, 1e-6))
+    """
+    mean = ARTIFACTS["scaler"]["mean"]
+    scale = ARTIFACTS["scaler"]["scale"]
+
+    safe_flow = max(float(flow_velocity_cms), 1e-6)
+    log10_flow = math.log10(safe_flow)
+
+    x0 = (float(ambient_o2_percent) - mean[0]) / scale[0]
+    x1 = (log10_flow - mean[1]) / scale[1]
+    x = [x0, x1]
+
+    w = ARTIFACTS["weights"]
+
+    # fc_in + ReLU
+    h = [
+        max(0.0, sum(w["fc_in"]["weight"][i][j] * x[j] for j in range(2)) + w["fc_in"]["bias"][i])
+        for i in range(len(w["fc_in"]["bias"]))
+    ]
+
+    # res_fc1 + ReLU
+    f_h = [
+        max(0.0, sum(w["res_fc1"]["weight"][i][j] * h[j] for j in range(len(h))) + w["res_fc1"]["bias"][i])
+        for i in range(len(w["res_fc1"]["bias"]))
+    ]
+
+    # res_fc2 (linear)
+    f_h = [
+        sum(w["res_fc2"]["weight"][i][j] * f_h[j] for j in range(len(f_h))) + w["res_fc2"]["bias"][i]
+        for i in range(len(w["res_fc2"]["bias"]))
+    ]
+
+    # Residual skip connection: ReLU(h + f_h)
+    h_out = [max(0.0, h[i] + f_h[i]) for i in range(len(h))]
+
+    # fc_out + clamped sigmoid
+    logit = sum(w["fc_out"]["weight"][0][j] * h_out[j] for j in range(len(h_out))) + w["fc_out"]["bias"][0]
+    score = 1.0 / (1.0 + math.exp(-max(min(logit, 60.0), -60.0)))
+    return round(score, 6)
+
+
+def classify_experimental_regime(score: float, flow_velocity_cms: float) -> Dict[str, str]:
+    """Map the model's sustained-flame score to plain-English spacecraft flame behavior."""
+    if score < 0.25:
+        regime = "Quench / Blowoff Extinction Regime"
+        if flow_velocity_cms < 0.45:
+            mechanism = "Airflow is too slow to feed fresh oxygen to the flame; heat radiates away and any ignition self-extinguishes."
+        else:
+            mechanism = "Airflow is fast enough to blow fuel vapors away faster than they can burn, blowing the flame out."
+    elif score < 0.50:
+        regime = "Near-Limit Extinction Boundary"
+        mechanism = "Conditions sit right on the edge of burning; a small rise in oxygen or a drop in fan speed could let a flame catch."
+    elif score < 0.75:
+        regime = "Moderate Flame-Sustainment Regime"
+        mechanism = "Cabin airflow is feeding just enough oxygen to keep a small solid fire burning steadily instead of dying out."
+    elif score < 0.90:
+        regime = "High Flame-Sustainment Regime"
+        mechanism = "Oxygen and cabin airflow are in an ideal zone to keep solid plastics burning and spreading."
+    else:
+        regime = "Strong Sustained-Combustion Regime"
+        mechanism = "Cabin oxygen and gentle ventilation airflow strongly sustain continuous flame spread across solid materials."
+
+    return {"regime_label": regime, "physical_interpretation": mechanism}
+
+
+def build_grounded_fallback(
+    o2: float,
+    flow: float,
+    score: float,
+    predicted_state: int,
+    regime_info: Dict[str, str],
+) -> str:
+    """Plain-English astronaut cabin briefing when Groq API is unavailable."""
+    if predicted_state == 1:
+        status_line = (
+            f"At {o2:.1f}% oxygen and {flow:.3f} cm/s cabin airflow, any ignition on solid materials "
+            f"will stay lit and spread steadily (flame score: {score:.2f}). Because there is no gravity "
+            f"to pull hot air upward, the cabin ventilation fan is actively pushing fresh oxygen straight into the flame."
+        )
+        actions = (
+            "1. Kill local ventilation fans in the affected rack or module immediately to starve the flame of oxygen.\n"
+            "2. Cut power to any overheating avionics or cables in the zone.\n"
+            "3. Grab a CO2 or fine-water-mist extinguisher, aim directly at the base of the burning material, and monitor for invisible smoldering or smoke buildup."
+        )
+    else:
+        if flow < 0.45:
+            reason = "the cabin air is moving too slowly to bring fresh oxygen to the flame, so it suffocates and cools out on its own"
+        elif flow > 8.0:
+            reason = "the airflow is strong enough to blow hot fuel gases away before they can keep burning"
+        else:
+            reason = "the oxygen level is too low to keep a flame alive at this air speed"
+        status_line = (
+            f"At {o2:.1f}% oxygen and {flow:.3f} cm/s cabin airflow, a flame will not sustain itself "
+            f"(flame score: {score:.2f}). Physically, {reason}."
+        )
+        actions = (
+            "1. Keep ventilation steady—do not suddenly crank up fan speeds, which could push fresh oxygen onto a hot surface and reignite it.\n"
+            "2. Inspect the area for lingering smoke, toxic fumes, or hot spots, since microgravity fires can still smolder without a visible flame.\n"
+            "3. Power down any suspected faulty hardware and log the cabin sensor readings."
+        )
+
+    return (
+        f"What Is Happening in the Spacecraft\n"
+        f"{status_line} {regime_info['physical_interpretation']}\n\n"
+        f"Astronaut Actions\n"
+        f"{actions}"
+    )
+
+
+@app.get("/health")
+async def health_check() -> Dict[str, Any]:
+    return {
+        "status": "ok",
+        "model_version": ARTIFACTS.get("model_version"),
+        "groq_configured": bool(GROQ_API_KEY),
+        "qwen_model": QWEN_MODEL,
+        "supported_envelope": {
+            "ambient_o2_percent": [O2_MIN, O2_MAX],
+            "flow_velocity_cms": [FLOW_MIN, FLOW_MAX],
+            "fuel_baseline_mm": SUPPORTED_FUEL_MM,
+        },
+    }
+
+
+@app.get("/api/model")
+async def get_model_metadata() -> Dict[str, Any]:
+    """Expose supported bounds, units, provenance, and evaluation metrics to the frontend."""
+    return {
+        "model_name": ARTIFACTS.get("model_name"),
+        "model_version": ARTIFACTS.get("model_version"),
+        "architecture": ARTIFACTS.get("architecture"),
+        "raw_inputs": ARTIFACTS.get("raw_inputs"),
+        "feature_transforms": ARTIFACTS.get("feature_transforms"),
+        "fuel_baseline_mm": SUPPORTED_FUEL_MM,
+        "fuel_reference_description": ARTIFACTS.get("fuel_reference_description"),
+        "telemetry_bounds": ARTIFACTS.get("telemetry_bounds"),
+        "evaluation_metrics": ARTIFACTS.get("evaluation_metrics"),
+        "provenance": {
+            "investigation": "Burning and Suppression of Solids - II (BASS-II)",
+            "psi_id": "PSI-25",
+            "source_url": "https://psi.nasa.gov/physci/repo/data/investigations/PSI-25",
+            "ntrs_citation": "https://ntrs.nasa.gov/citations/20160000593",
+            "limitations": (
+                "Two-input experimental classifier trained on 51 digitized points from 6.35 mm PMMA rod "
+                "stagnation flame tests in microgravity. Outputs represent an experimental flame-sustainment "
+                "score, not a calibrated whole-vehicle cabin fire probability."
+            ),
+        },
+    }
+
+
+@app.get("/api/investigations")
+async def list_investigations(
+    q: Optional[str] = Query(default=None, description="Keyword search across title, fuels, and findings"),
+    fuel: Optional[str] = Query(default=None, description="Filter by fuel material (e.g., PMMA, SIBAL, Heptane)"),
+    sort_by: str = Query(default="relevance", pattern="^(relevance|min_o2|max_flow)$"),
+) -> Dict[str, Any]:
+    """Curated NASA PSI combustion investigation catalog with search, filtering, and ranking."""
+    results = list(PSI_INVESTIGATIONS)
+
+    if q:
+        needle = q.strip().lower()
+        results = [
+            item
+            for item in results
+            if needle in item["title"].lower()
+            or needle in item["key_findings"].lower()
+            or needle in item["flow_regime"].lower()
+            or any(needle in f.lower() for f in item["fuels"])
+        ]
+
+    if fuel:
+        f_needle = fuel.strip().lower()
+        results = [item for item in results if any(f_needle in f.lower() for f in item["fuels"])]
+
+    if sort_by == "min_o2":
+        results.sort(key=lambda x: x["oxygen_range_percent"][0])
+    elif sort_by == "max_flow":
+        results.sort(key=lambda x: x["flow_velocity_range_cms"][1], reverse=True)
+    else:
+        results.sort(key=lambda x: x["fire_safety_relevance_score"], reverse=True)
+
+    return {
+        "count": len(results),
+        "sort_by": sort_by,
+        "investigations": results,
+    }
+
+
+@app.get("/api/investigations/{psi_id}")
+async def get_investigation_detail(psi_id: str) -> Dict[str, Any]:
+    target = psi_id.strip().upper()
+    for item in PSI_INVESTIGATIONS:
+        if item["psi_id"].upper() == target:
+            return item
+    raise HTTPException(status_code=404, detail=f"Investigation '{psi_id}' not found in curated PSI catalog.")
+
+
+@app.post("/api/predict")
+async def predict_endpoint(req: TelemetryRequest) -> Dict[str, Any]:
+    violations = validate_supported_envelope(req)
+    if violations:
+        return {
+            "status": "outside_supported_conditions",
+            "supported": False,
+            "reasons": violations,
+            "supported_envelope": {
+                "ambient_o2_percent": {"min": O2_MIN, "max": O2_MAX, "unit": "%"},
+                "flow_velocity_cms": {"min": FLOW_MIN, "max": FLOW_MAX, "unit": "cm/s"},
+                "fuel_thickness_mm": {"exact": SUPPORTED_FUEL_MM, "unit": "mm"},
+            },
+        }
+
+    score = compute_sustained_flame_score(req.ambient_o2_percent, req.flow_velocity_cms)
+    predicted_state = 1 if score >= 0.5 else 0
+    regime_info = classify_experimental_regime(score, req.flow_velocity_cms)
+
+    return {
+        "status": "supported",
+        "supported": True,
+        "flame_hazard_state": predicted_state,
+        "sustained_flame_score": score,
+        "regime_label": regime_info["regime_label"],
+        "physical_interpretation": regime_info["physical_interpretation"],
+        "inputs": {
+            "ambient_o2_percent": req.ambient_o2_percent,
+            "flow_velocity_cms": req.flow_velocity_cms,
+            "log10_flow_velocity_cms": round(math.log10(req.flow_velocity_cms), 6),
+            "fuel_baseline_mm": SUPPORTED_FUEL_MM,
+        },
+        "scope_note": (
+            "Experimental flame-sustainment estimate for a 6.35 mm cast PMMA rod based on NASA BASS-II "
+            "microgravity stagnation data (PSI-25). Not a validated whole-cabin fire probability."
+        ),
+    }
+
+
+@app.post("/api/briefing")
+async def briefing_endpoint(req: TelemetryRequest) -> Dict[str, Any]:
+    violations = validate_supported_envelope(req)
+    if violations:
+        return {
+            "status": "outside_supported_conditions",
+            "supported": False,
+            "reasons": violations,
+            "briefing": (
+                "Outside Supported Cabin Sensor Range\n"
+                + "\n".join(f"- {v}" for v in violations)
+                + f"\n\nSet cabin telemetry back inside {O2_MIN}%-{O2_MAX}% O2 and "
+                f"{FLOW_MIN}-{FLOW_MAX} cm/s airflow for an operational crew briefing."
+            ),
+            "source": "envelope_guard",
+        }
+
+    score = compute_sustained_flame_score(req.ambient_o2_percent, req.flow_velocity_cms)
+    predicted_state = 1 if score >= 0.5 else 0
+    regime_info = classify_experimental_regime(score, req.flow_velocity_cms)
+    fallback_text = build_grounded_fallback(
+        req.ambient_o2_percent, req.flow_velocity_cms, score, predicted_state, regime_info
+    )
+
+    if not GROQ_API_KEY:
+        logger.info("GROQ_API_KEY not configured; serving plain-English astronaut fallback.")
+        return {
+            "status": "supported",
+            "supported": True,
+            "flame_hazard_state": predicted_state,
+            "sustained_flame_score": score,
+            "regime_label": regime_info["regime_label"],
+            "briefing": fallback_text,
+            "source": "local_fallback_no_key",
+        }
+
+    system_prompt = (
+        "You are an onboard spacecraft fire-safety assistant speaking directly to an astronaut in orbit. "
+        "Explain in plain, everyday English what is physically happening to a flame inside the microgravity cabin "
+        "and tell the astronaut exactly what actions to take right now.\n"
+        "Strict rules:\n"
+        "1. Do NOT cite research papers, NASA report numbers, PSI IDs, or dataset statistics.\n"
+        "2. Do NOT use machine learning terms (no 'score', 'logits', 'model', 'dataset', or 'weights').\n"
+        "3. Do NOT use markdown bolding (**) anywhere in your response.\n"
+        "4. Explain the real microgravity physics simply: without gravity, hot air does not rise, so cabin fans "
+        "control whether a flame suffocates (too little airflow), burns steadily (gentle airflow + enough oxygen), "
+        "or gets blown out (high airflow).\n"
+        "5. Give 3 clear, practical crew actions (managing cabin ventilation fans, cutting power to hot gear, "
+        "checking for invisible smoldering/smoke, or using a spacecraft fire extinguisher if a flame is sustained).\n"
+        "6. Use exactly two short headings: 'What Is Happening in the Spacecraft' and 'Astronaut Actions'."
+    )
+
+    user_prompt = (
+        f"Current Cabin Sensor Readings:\n"
+        f"- Cabin Oxygen: {req.ambient_o2_percent}%\n"
+        f"- Cabin Airflow Speed: {req.flow_velocity_cms} cm/s\n"
+        f"- Flame Status: {'SUSTAINED FLAME (will keep burning and spreading)' if predicted_state == 1 else 'SELF-EXTINGUISHING (flame will die out)'}\n"
+        f"- Physical Condition: {regime_info['physical_interpretation']}\n"
+        f"Tell the astronaut what is physically happening and what actions to take."
+    )
+
+    payload = {
+        "model": QWEN_MODEL,
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ],
+        "temperature": 0.25,
+        "max_tokens": 800,
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.post(
+                "https://api.groq.com/openai/v1/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {GROQ_API_KEY}",
+                    "Content-Type": "application/json",
+                },
+                json=payload,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+
+        choices = data.get("choices") or []
+        if not choices:
+            logger.warning("Groq API returned empty choices list; falling back.")
+            raise ValueError("Empty choices in Groq response")
+
+        choice = choices[0]
+        raw_content = (choice.get("message") or {}).get("content", "")
+        content = re.sub(r"<think>.*?</think>", "", raw_content, flags=re.DOTALL).strip()
+
+        if not content:
+            logger.warning("Groq output empty after stripping think tags; falling back.")
+            raise ValueError("Empty LLM output")
+
+        return {
+            "status": "supported",
+            "supported": True,
+            "flame_hazard_state": predicted_state,
+            "sustained_flame_score": score,
+            "regime_label": regime_info["regime_label"],
+            "briefing": content,
+            "source": f"groq:{QWEN_MODEL}",
+        }
+
+    except Exception as exc:
+        logger.error("Groq briefing request failed (%s); serving deterministic fallback.", exc)
+        return {
+            "status": "supported",
+            "supported": True,
+            "flame_hazard_state": predicted_state,
+            "sustained_flame_score": score,
+            "regime_label": regime_info["regime_label"],
+            "briefing": fallback_text,
+            "source": "local_fallback_error",
+            "fallback_reason": str(exc),
+        }
