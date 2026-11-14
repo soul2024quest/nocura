@@ -44,7 +44,7 @@ PSI_INVESTIGATIONS: List[Dict[str, Any]] = [
         "facility": "Microgravity Science Glovebox (MSG), ISS",
         "fuels": ["Cast PMMA rods (6.35 mm)", "PMMA slabs & spheres", "SIBAL cotton-fiberglass", "Nomex"],
         "oxygen_range_percent": [13.5, 21.9],
-        "flow_velocity_range_cms": [0.106, 40.0],
+        "flow_velocity_range_cms": [0.106, 40.0],         
         "flow_regime": "Opposed and concurrent forced flow (low-velocity wind tunnel)",
         "primary_sensors": ["Color video camera", "Radiometer", "CSA-CP & CDM gas/smoke sensors"],
         "key_findings": (
