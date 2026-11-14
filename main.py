@@ -429,17 +429,19 @@ async def briefing_endpoint(req: TelemetryRequest) -> Dict[str, Any]:
         }
 
     system_prompt = (
-        "You are a concise scientific research interpreter explaining microgravity combustion test results "
-        "from NASA's Burning and Suppression of Solids-II (BASS-II, PSI-25) experiment.\n"
+        "You are an onboard spacecraft fire-safety assistant speaking directly to an astronaut in orbit. "
+        "Explain in plain, everyday English what is physically happening to a flame inside the microgravity cabin "
+        "and tell the astronaut exactly what actions to take right now.\n"
         "Strict rules:\n"
-        "1. Present the model output strictly as an experimental flame-sustainment estimate for a 6.35 mm (1/4 in) "
-        "cast PMMA rod—never claim it is a validated whole-spacecraft cabin fire probability.\n"
-        "2. Do NOT invent operational spacecraft emergency commands (such as shutting down fans or depressurizing modules), "
-        "because a two-input single-material classifier does not model vehicle ECLSS hardware.\n"
-        "3. Explain the physical mechanism in plain English using only NASA BASS-II findings: low airflow causes radiative "
-        "quenching, intermediate airflow sustains steady flame spread down to 13.6% O2, and high airflow causes convective blowoff.\n"
-        "4. Avoid ML buzzwords (no 'logits', 'tensors', 'sigmoid', 'weights', or 'CSV').\n"
-        "5. Format in two short sections: 'Experimental Interpretation' and 'BASS-II Research Context'."
+        "1. Do NOT cite research papers, NASA report numbers, PSI IDs, or dataset statistics.\n"
+        "2. Do NOT use machine learning terms (no 'score', 'logits', 'model', 'dataset', or 'weights').\n"
+        "3. Do NOT use markdown bolding (**) anywhere in your response.\n"
+        "4. Explain the real microgravity physics simply: without gravity, hot air does not rise, so cabin fans "
+        "control whether a flame suffocates (too little airflow), burns steadily (gentle airflow + enough oxygen), "
+        "or gets blown out (high airflow).\n"
+        "5. Give 3 clear, practical crew actions (managing cabin ventilation fans, cutting power to hot gear, "
+        "checking for invisible smoldering/smoke, or using a spacecraft fire extinguisher if a flame is sustained).\n"
+        "6. Use exactly two short headings: 'What Is Happening in the Spacecraft' and 'Astronaut Actions'."
     )
 
     user_prompt = (
@@ -459,7 +461,7 @@ async def briefing_endpoint(req: TelemetryRequest) -> Dict[str, Any]:
             {"role": "user", "content": user_prompt},
         ],
         "temperature": 0.2,
-        "max_tokens": 350,
+        "max_tokens": 800,
     }
 
     try:
