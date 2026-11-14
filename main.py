@@ -503,6 +503,12 @@ async def briefing_endpoint(req: TelemetryRequest) -> Dict[str, Any]:
             logger.warning("Groq output empty after stripping think tags; falling back.")
             raise ValueError("Empty LLM output")
 
+        # Keep status and urgency tied to the actual prediction, rather than an LLM paraphrase.
+        sections = content.split("Astronaut Actions", 1)
+        if len(sections) != 2:
+            raise ValueError("Briefing missing Astronaut Actions section")
+        content = fallback_text.split("Astronaut Actions", 1)[0] + "Astronaut Actions" + sections[1]
+
         return {
             "status": "supported",
             "supported": True,
