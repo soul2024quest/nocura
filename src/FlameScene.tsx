@@ -27,28 +27,36 @@ void main(){
   if(float(i)>=steps||trans<.015)break;
   vec3 p=ro+rd*(max(nearT,0.)+(float(i)+.5)*ds);
   float r0=length(p.yz);
-  if(p.x>-.78&&p.x<2.35&&r0<.085){
+  float rodRadius=.085*smoothstep(-.98,-.53,p.x);
+  if(p.x>-.98&&p.x<2.35&&r0<rodRadius){
    float hot=exp(-pow((p.x+.62)*3.,2.))*burn;
-   acc+=trans*(vec3(.08)+vec3(.12)*smoothstep(-.08,.08,p.y)+hot*vec3(.3,.045,.005));trans=0.;break;
+   acc+=trans*(vec3(.025)+vec3(.055)*smoothstep(-.08,.08,p.y)+hot*vec3(.08,.012,.001));trans=0.;break;
   }
   vec3 adv=vec3(p.x*2.7-time*(.35+flow*.8),p.y*4.,p.z*4.);
   float n=fbm(adv),fine=noise(adv*3.);
   float tail=smoothstep(-.45,1.65,p.x);
-  vec2 bend=vec2(sin(p.x*3.-time*1.4),sin(p.x*2.7-time))*.075*tail;
+  vec2 bend=vec2(sin(p.x*3.-time*1.4),sin(p.x*2.7-time))*.11*tail;
   float r=length(p.yz-bend);
   float cap=sqrt(max(0.,1.-pow(min(p.x+.55,0.)/.82,2.)));
-  float radius=(.48+oxygen*.12+flow*.13)*cap*(1.-.32*smoothstep(.3,2.35,p.x));
-  radius+=(n-.5)*(.09+tail*.43);
-  float shell=exp(-pow((r-radius)/(.043+.04*tail),2.));
+  float angle=atan(p.z,p.y);
+  float curl=sin(p.x*5.-time*1.7+angle*3.);
+  float radius=(.48+oxygen*.12+flow*.13)*cap;
+  radius+=(n-.5)*(.035+tail*.24)+tail*(.10+curl*.14);
+  float shell=exp(-pow((r-radius)/(.028+.025*tail),2.));
   float env=smoothstep(-1.4,-1.15,p.x)*(1.-smoothstep(.35+flow*.25,2.1+flow*.25,p.x));
-  float density=(shell*2.5+exp(-pow(r/(max(radius,.001)),2.))*.14)*env*mix(1.,smoothstep(.23,.64,n),tail)*burn;
+  // An edge-weighted hollow envelope preserves the dark gap around the rod.
+  // This is an artistic radiance control, not a solid obstacle in the experiment.
+  vec3 normal=normalize(vec3(min(p.x+.55,0.)/.6724,(p.y-bend.x)/.3025,(p.z-bend.y)/.3025));
+  float rim=pow(1.-abs(dot(normal,rd)),2.8);
+  float ribbons=mix(1.,smoothstep(.32,.72,n+curl*.16),tail);
+  float density=shell*3.4*(.035+rim*.965)*env*ribbons*burn;
   if(radius<.02)density=0.;
-  float heat=clamp(shell*.8+(1.-tail)*.25+fine*.15,0.,1.);
+  float heat=clamp(rim*.65+(1.-tail)*.25+fine*.12,0.,1.);
   vec3 color=mix(vec3(.62,.018,.001),vec3(2.7,.45,.012),heat);
   color=mix(color,vec3(3.2,1.4,.12),pow(heat,5.)*(1.-tail*.65));
-  float blue=exp(-pow((r-.115)/.035,2.))*env*burn*.4;
+  float blue=exp(-pow((r-.115)/.025,2.))*env*burn*.035;
   acc+=trans*(color*density+blue*vec3(.025,.12,.8))*ds*2.1;
-  trans*=exp(-density*ds*1.4);
+  trans*=exp(-density*ds*.75);
  }
  gl_FragColor=vec4(pow(vec3(1.)-exp(-acc*1.25),vec3(.82)),1.);
 }`;
