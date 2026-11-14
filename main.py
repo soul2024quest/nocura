@@ -247,8 +247,8 @@ def build_grounded_fallback(
     """Plain-English astronaut cabin briefing when Groq API is unavailable."""
     if predicted_state == 1:
         status_line = (
-            "Fire status: not confirmed by these readings. The tested material may sustain burning if ignited. "
-            "If smoke, flame, or a fire alarm is present, take immediate action under your spacecraft fire procedure."
+            "Sustained flame predicted. A flame on the tested PMMA material is expected to keep burning "
+            "under these conditions. An ongoing fire needs immediate response under the spacecraft fire procedure."
         )
         actions = (
             "1. Kill local ventilation fans in the affected rack or module immediately to starve the flame of oxygen.\n"
@@ -257,9 +257,8 @@ def build_grounded_fallback(
         )
     else:
         status_line = (
-            "Fire status: not confirmed by these readings. Sustained burning of the tested material is not predicted. "
-            "This does not establish that the cabin is safe. If smoke, flame, or a fire alarm is present, "
-            "take immediate action under your spacecraft fire procedure."
+            "Flame extinction predicted. A flame on the tested PMMA material is expected to die out "
+            "under these conditions. Check for remaining smoke, smoldering, and hot spots."
         )
         actions = (
             "1. Keep ventilation steady—do not suddenly crank up fan speeds, which could push fresh oxygen onto a hot surface and reignite it.\n"
@@ -442,20 +441,22 @@ async def briefing_endpoint(req: TelemetryRequest) -> Dict[str, Any]:
     system_prompt = (
         "You are an onboard spacecraft fire-safety assistant speaking directly to an astronaut in orbit. "
         "Give a concise, operationally relevant status briefing in plain, everyday English: "
-        "whether a fire is confirmed, whether conditions could sustain burning, and whether immediate action is needed.\n"
+        "state the supplied predicted flame outcome and the response it calls for.\n"
         "Strict rules:\n"
         "1. Do NOT cite research papers, NASA report numbers, PSI IDs, or dataset statistics.\n"
         "2. Do NOT use machine learning terms (no 'score', 'logits', 'model', 'dataset', or 'weights').\n"
         "3. Do NOT use markdown bolding (**) anywhere in your response.\n"
-        "4. In 'What Is Happening in the Spacecraft', use at most three short sentences focused on fire status "
-        "and urgency. Do NOT explain physics, flame shape, buoyancy, oxygen transport, or how fans feed a flame. "
-        "These oxygen and airflow readings cannot detect an actual fire: explicitly say fire is not confirmed. "
-        "Describe predicted burning only conditionally for the tested material if ignited; never declare the cabin "
-        "fire-free or safe. If smoke, flame, or an alarm is present, immediate action under the spacecraft fire "
-        "procedure is required regardless of the prediction. Do not announce an emergency from these readings alone.\n"
+        "4. In 'What Is Happening in the Spacecraft', use at most three short sentences stating the supplied "
+        "prediction: sustained flame means burning is expected to continue; extinction means burning is expected "
+        "to die out. Keep the prediction limited to the tested PMMA material. Do NOT add a 'Fire status' label "
+        "or discuss confirmation or detection. Do NOT explain physics, buoyancy, or oxygen transport.\n"
         "5. Give 3 clear, practical crew actions (managing cabin ventilation fans, cutting power to hot gear, "
         "checking for invisible smoldering/smoke, or using a spacecraft fire extinguisher if a flame is sustained).\n"
-        "6. Use exactly two short headings: 'What Is Happening in the Spacecraft' and 'Astronaut Actions'."
+        "6. Use exactly two short headings: 'What Is Happening in the Spacecraft' and 'Astronaut Actions'.\n"
+        "7. Actions MUST match the supplied outcome. For sustained burning, prioritize immediate response to "
+        "an ongoing fire under the spacecraft fire procedure; do not give routine monitoring as the only response. "
+        "For extinction, focus on residual smoke, smoldering, and hot spots. Do not invent fan settings or "
+        "vehicle-specific emergency commands; defer those to the spacecraft procedure."
     )
 
     user_prompt = (
@@ -463,8 +464,7 @@ async def briefing_endpoint(req: TelemetryRequest) -> Dict[str, Any]:
         f"- Cabin Oxygen: {req.ambient_o2_percent}%\n"
         f"- Cabin Airflow Speed: {req.flow_velocity_cms} cm/s\n"
         f"- Experimental result for the tested PMMA material if ignited: {'sustained burning predicted' if predicted_state == 1 else 'sustained burning not predicted'}\n"
-        "- Actual fire, smoke, and alarm observations: not provided.\n"
-        "Report fire status and urgency without a physics explanation, then give three concise crew actions."
+        "State this predicted outcome directly without confirmation wording, then give three matching crew actions."
     )
 
     payload = {
