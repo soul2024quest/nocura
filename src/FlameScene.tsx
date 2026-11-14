@@ -27,10 +27,12 @@ void main(){
   if(float(i)>=steps||trans<.015)break;
   vec3 p=ro+rd*(max(nearT,0.)+(float(i)+.5)*ds);
   float r0=length(p.yz);
-  float rodRadius=.085*smoothstep(-.98,-.53,p.x);
-  if(p.x>-.98&&p.x<2.35&&r0<rodRadius){
+  // Rounded consumed tip, gently widening specimen and static surface irregularity.
+  float rodRadius=(.16+.045*smoothstep(-.7,1.6,p.x))*sqrt(smoothstep(-1.12,-.86,p.x));
+  rodRadius+=(noise(vec3(p.x*30.,atan(p.z,p.y)*8.,2.))-.5)*.009;
+  if(p.x>-1.12&&p.x<2.35&&r0<rodRadius){
    float hot=exp(-pow((p.x+.62)*3.,2.))*burn;
-   acc+=trans*(vec3(.025)+vec3(.055)*smoothstep(-.08,.08,p.y)+hot*vec3(.08,.012,.001));trans=0.;break;
+   acc+=trans*(vec3(.018)+vec3(.035)*smoothstep(-.16,.16,p.y)+hot*vec3(.065,.014,.004));trans=0.;break;
   }
   vec3 adv=vec3(p.x*2.7-time*(.35+flow*.8),p.y*4.,p.z*4.);
   float n=fbm(adv),fine=noise(adv*3.);
@@ -41,7 +43,7 @@ void main(){
   float angle=atan(p.z,p.y);
   float curl=sin(p.x*5.-time*1.7+angle*3.);
   float radius=(.48+oxygen*.12+flow*.13)*cap;
-  radius+=(n-.5)*(.035+tail*.24)+tail*(.10+curl*.14);
+  radius+=(n-.5)*(.015+tail*.26)+tail*(.075+curl*.18);
   float shell=exp(-pow((r-radius)/(.028+.025*tail),2.));
   float env=smoothstep(-1.4,-1.15,p.x)*(1.-smoothstep(.35+flow*.25,2.1+flow*.25,p.x));
   // An edge-weighted hollow envelope preserves the dark gap around the rod.
@@ -63,6 +65,7 @@ void main(){
 type Props={onReady:()=>void;reduced:boolean;inputs:Inputs;onPrediction:(prediction:Prediction,inputs:Inputs)=>void};
 export default function FlameScene({onReady,reduced,inputs,onPrediction}:Props){
  const host=useRef<HTMLDivElement>(null),api=useRef<{reset:()=>void;zoom:(n:number)=>void}|undefined>(undefined);
+ const [view,setView]=useState<'illustration'|'experiment'>('illustration');
  const [paused,setPaused]=useState(false),[failed,setFailed]=useState(false),[pending,setPending]=useState(true),[message,setMessage]=useState('Preparing flame view'),[failure,setFailure]=useState('');
  const target=useRef({flow:.28,oxygen:.31,burn:0}),pause=useRef(paused||reduced);
  useEffect(()=>{pause.current=paused||reduced;},[paused,reduced]);
@@ -98,5 +101,5 @@ export default function FlameScene({onReady,reduced,inputs,onPrediction}:Props){
   const lost=(e:Event)=>{e.preventDefault();setFailed(true);};renderer.domElement.addEventListener('webglcontextlost',lost);onReady();
   return()=>{cancelAnimationFrame(raf);io.disconnect();observer.disconnect();controls.dispose();geometry.dispose();material.dispose();renderer.dispose();renderer.domElement.remove();api.current=undefined;};
  },[onReady]);
- return <div className="scene-wrap flame-volume"><div className="scene-header"><span>02 / INTERACTIVE FLAME</span><span>μg / LIVE VIEW</span></div><div ref={host} className="scene-canvas" role="img" aria-label="Physics-inspired flame around a horizontal PMMA rod. Drag to rotate. Shape and colors are illustrative."/>{failed&&<div className="scene-fallback"><p>Interactive rendering unavailable.<br/>Predictions remain available in the results panel.</p></div>}{pending&&<div className="flame-loading" role="status"><span className="flame-spinner"/>Updating conditions</div>}<div className="scene-caption" aria-live="polite"><span className="specimen-tag">{message}</span><p>{failure||'PMMA · 6.35 mm / Drag to orbit'}</p></div><div className="scene-toolbar"><span>PHYSICS-INSPIRED · SHAPE & COLOR ILLUSTRATIVE</span><div><button className="icon-button" aria-label="Zoom in" onClick={()=>api.current?.zoom(.9)}><Plus size={15}/></button><button className="icon-button" aria-label="Zoom out" onClick={()=>api.current?.zoom(1.1)}><Minus size={15}/></button><button className="icon-button" aria-label="Reset 3D view" onClick={()=>api.current?.reset()}><RotateCcw size={15}/></button><button className="icon-button" aria-label={paused?'Resume motion':'Pause motion'} disabled={reduced} onClick={()=>setPaused(!paused)}>{paused||reduced?<Play size={15}/>:<Pause size={15}/>}</button></div></div></div>;
+ return <div className="scene-wrap flame-volume"><div className="scene-header"><span>02 / INTERACTIVE FLAME</span><span>μg / LIVE VIEW</span></div><div className="view-switch" aria-label="Flame view">{([ ['illustration','Illustration'],['experiment','Real experiment'] ] as const).map(([id,label])=><button key={id} aria-pressed={view===id} onClick={()=>setView(id)}>{label}</button>)}</div><div hidden={view!=='illustration'} ref={host} className="scene-canvas" role="img" aria-label="Physics-inspired flame around a horizontal PMMA rod. Drag to rotate. Shape and colors are illustrative."/>{view==='experiment'&&<figure className="experiment-photo"><img src="/bass-ii-esa-nasa.jpg" alt="Actual BASS-II flame photographed aboard the International Space Station: rounded luminous front, dark central specimen, and curling orange flame downstream."/><figcaption><strong>BASS-II / International Space Station</strong><p>Actual experiment photograph, published 8 August 2014. Credit: ESA/NASA. This fixed reference does not change with your inputs; its exact oxygen and airflow settings are not given on the image page.</p><a href="https://www.esa.int/ESA_Multimedia/Images/2014/08/Microgravity_flame" target="_blank" rel="noreferrer">View original photograph ↗</a></figcaption></figure>}{failed&&view==='illustration'&&<div className="scene-fallback"><p>Interactive rendering unavailable.<br/>Predictions remain available in the results panel.</p></div>}{pending&&view==='illustration'&&<div className="flame-loading" role="status"><span className="flame-spinner"/>Updating conditions</div>}<div hidden={view!=='illustration'} className="scene-caption" aria-live="polite"><span className="specimen-tag">{message}</span><p>{failure||'PMMA · 6.35 mm / Drag to orbit'}</p></div><div hidden={view!=='illustration'} className="scene-toolbar"><span>PHYSICS-INSPIRED · SHAPE & COLOR ILLUSTRATIVE</span><div><button className="icon-button" aria-label="Zoom in" onClick={()=>api.current?.zoom(.9)}><Plus size={15}/></button><button className="icon-button" aria-label="Zoom out" onClick={()=>api.current?.zoom(1.1)}><Minus size={15}/></button><button className="icon-button" aria-label="Reset 3D view" onClick={()=>api.current?.reset()}><RotateCcw size={15}/></button><button className="icon-button" aria-label={paused?'Resume motion':'Pause motion'} disabled={reduced} onClick={()=>setPaused(!paused)}>{paused||reduced?<Play size={15}/>:<Pause size={15}/>}</button></div></div><details className="flame-sources"><summary>Sources &amp; visual assumptions</summary><div><p><strong>Research basis.</strong> NASA BASS-II (PSI-25) studied solid-fuel combustion aboard the ISS. Our predictor uses 51 digitized points for 6.35 mm PMMA rods across oxygen and airflow conditions.</p><a href="https://psi.nasa.gov/physci/repo/data/investigations/PSI-25" target="_blank" rel="noreferrer">NASA PSI investigation ↗</a><a href="https://ntrs.nasa.gov/citations/20160000593" target="_blank" rel="noreferrer">NASA research &amp; experimental images ↗</a><a href="https://github.com/soul2024quest/nocura/blob/main/dataset_provenance.md" target="_blank" rel="noreferrer">Training-data provenance ↗</a><p><strong>Visual assumptions.</strong> The rounded hollow envelope, specimen taper, surface texture and curling trails are artistically shaped to resemble the photograph. The invisible shaping boundary is not experimental hardware. Geometry, color, and temperature are not predicted. Only the sustained/extinction state comes from the backend.</p></div></details></div>;
 }

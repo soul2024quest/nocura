@@ -1,5 +1,11 @@
 # Uiverse component adaptations
 
+## Scientific reference photograph
+
+`public/bass-ii-esa-nasa.jpg`: "Microgravity flame", published 8 August 2014. Credit: ESA/NASA. Source: https://www.esa.int/ESA_Multimedia/Images/2014/08/Microgravity_flame . ESA Standard Licence. Reproduced unchanged as an educational experimental reference; no endorsement implied. Original file: https://media.esa.int/legacy/web/images/esa_multimedia/images/2014/08/microgravity_flame/14714389-2-eng-GB/Microgravity_flame.jpg .
+
+## Component credits
+
 Nocura adapts the following community components to its monochrome palette and accessible native controls:
 
 - Button interaction mechanics: https://uiverse.io/cssbuttons-io/evil-monkey-41 — Copyright 2026 cssbuttons-io (cssbuttons.io).
