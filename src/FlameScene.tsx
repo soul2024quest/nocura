@@ -52,8 +52,8 @@ void main(){
  }
  gl_FragColor=vec4(pow(vec3(1.)-exp(-acc*1.25),vec3(.82)),1.);
 }`;
-type Props={onReady:()=>void;reduced:boolean;inputs:Inputs};
-export default function FlameScene({onReady,reduced,inputs}:Props){
+type Props={onReady:()=>void;reduced:boolean;inputs:Inputs;onPrediction:(prediction:Prediction,inputs:Inputs)=>void};
+export default function FlameScene({onReady,reduced,inputs,onPrediction}:Props){
  const host=useRef<HTMLDivElement>(null),api=useRef<{reset:()=>void;zoom:(n:number)=>void}|undefined>(undefined);
  const [paused,setPaused]=useState(false),[failed,setFailed]=useState(false),[pending,setPending]=useState(true),[message,setMessage]=useState('Preparing flame view'),[failure,setFailure]=useState('');
  const target=useRef({flow:.28,oxygen:.31,burn:0}),pause=useRef(paused||reduced);
@@ -63,12 +63,13 @@ export default function FlameScene({onReady,reduced,inputs}:Props){
   if(!Number.isFinite(inputs.ambient_o2_percent)||!Number.isFinite(inputs.flow_velocity_cms)){setPending(false);setFailure('Enter valid conditions.');target.current.burn=0;return;}
   const timer=setTimeout(()=>{request<Prediction>('/api/predict',inputs,controller.signal).then(p=>{
    if(controller.signal.aborted)return;
+   onPrediction(p,{...inputs});
    if(!p.supported){target.current.burn=0;setMessage('Outside experimental range');setFailure('Adjust conditions into the supported range.');return;}
    target.current={flow:THREE.MathUtils.clamp(inputs.flow_velocity_cms/16.298,0,1),oxygen:THREE.MathUtils.clamp((inputs.ambient_o2_percent-13.5)/8.4,0,1),burn:p.flame_hazard_state===1?1:0};
    setMessage(p.flame_hazard_state===1?'Sustained flame predicted':'Extinction predicted');
   }).catch(e=>{if(!controller.signal.aborted){setFailure(e.message);setMessage('Flame update unavailable');target.current.burn=0;}}).finally(()=>{if(!controller.signal.aborted)setPending(false);});},350);
   return()=>{clearTimeout(timer);controller.abort();};
- },[inputs.ambient_o2_percent,inputs.flow_velocity_cms,inputs.fuel_thickness_mm]);
+ },[inputs.ambient_o2_percent,inputs.flow_velocity_cms,inputs.fuel_thickness_mm,onPrediction]);
  useEffect(()=>{
   const el=host.current;if(!el)return;let renderer:THREE.WebGLRenderer;
   try{renderer=new THREE.WebGLRenderer({alpha:false,antialias:false,powerPreference:'low-power'});}catch{setFailed(true);onReady();return;}
