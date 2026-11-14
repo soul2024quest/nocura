@@ -27,12 +27,14 @@ void main(){
   if(float(i)>=steps||trans<.015)break;
   vec3 p=ro+rd*(max(nearT,0.)+(float(i)+.5)*ds);
   float r0=length(p.yz);
-  // Rounded consumed tip, gently widening specimen and static surface irregularity.
-  float rodRadius=(.16+.045*smoothstep(-.7,1.6,p.x))*sqrt(smoothstep(-1.12,-.86,p.x));
-  rodRadius+=(noise(vec3(p.x*30.,atan(p.z,p.y)*8.,2.))-.5)*.009;
+  // Slim specimen with a longer, roughly conical consumed tip and static texture.
+  float taper=clamp((p.x+1.12)/.72,0.,1.);
+  float rodRadius=(.082+.012*smoothstep(-.4,1.6,p.x))*taper;
+  rodRadius+=(noise(vec3(p.x*42.,atan(p.z,p.y)*9.,2.))-.5)*.014*taper;
   if(p.x>-1.12&&p.x<2.35&&r0<rodRadius){
    float hot=exp(-pow((p.x+.62)*3.,2.))*burn;
-   acc+=trans*(vec3(.018)+vec3(.035)*smoothstep(-.16,.16,p.y)+hot*vec3(.065,.014,.004));trans=0.;break;
+   float grain=.65+.5*noise(vec3(p.x*75.,p.y*150.,p.z*150.));
+   acc+=trans*((vec3(.018)+vec3(.035)*smoothstep(-.09,.09,p.y))*grain+hot*vec3(.065,.014,.004));trans=0.;break;
   }
   vec3 adv=vec3(p.x*2.7-time*(.35+flow*.8),p.y*4.,p.z*4.);
   float n=fbm(adv),fine=noise(adv*3.);
