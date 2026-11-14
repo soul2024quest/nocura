@@ -1,31 +1,93 @@
-import { useEffect, useRef, useState } from 'react';
+import {useEffect,useRef,useState} from 'react';
 import * as THREE from 'three';
-import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { Pause, Play, RotateCcw, Minus, Plus } from 'lucide-react';
-type Props={onReady:()=>void; reduced:boolean};
-export default function FlameScene({onReady,reduced}:Props){
+import {OrbitControls} from 'three/addons/controls/OrbitControls.js';
+import {Pause,Play,RotateCcw,Minus,Plus} from 'lucide-react';
+import {request,type Inputs,type Prediction} from './api';
+// Procedural radiance volume; this renders an illustration, not a combustion solver.
+const fragment=`
+precision highp float;
+varying vec2 vUv;
+uniform vec2 resolution;
+uniform vec3 eye;
+uniform mat4 basis;
+uniform float time,flow,oxygen,burn,steps;
+float hash(vec3 p){p=fract(p*.3183099+vec3(.1,.2,.3));p*=17.;return fract(p.x*p.y*p.z*(p.x+p.y+p.z));}
+float noise(vec3 p){vec3 i=floor(p),f=fract(p);f=f*f*(3.-2.*f);return mix(mix(mix(hash(i),hash(i+vec3(1,0,0)),f.x),mix(hash(i+vec3(0,1,0)),hash(i+vec3(1,1,0)),f.x),f.y),mix(mix(hash(i+vec3(0,0,1)),hash(i+vec3(1,0,1)),f.x),mix(hash(i+vec3(0,1,1)),hash(i+vec3(1,1,1)),f.x),f.y),f.z);}
+float fbm(vec3 p){return .57*noise(p)+.28*noise(p*2.03)+.15*noise(p*4.01);}
+void main(){
+ vec2 uv=vUv*2.-1.;uv.x*=resolution.x/resolution.y;
+ vec3 rd=normalize(mat3(basis)*vec3(uv*.344,-1.)),ro=eye;
+ vec3 a=(vec3(-2.2,-1.5,-1.5)-ro)/rd,b=(vec3(2.6,1.5,1.5)-ro)/rd;
+ vec3 lo=min(a,b),hi=max(a,b);
+ float nearT=max(max(lo.x,lo.y),lo.z),farT=min(min(hi.x,hi.y),hi.z);
+ if(farT<max(nearT,0.)){gl_FragColor=vec4(0,0,0,1);return;}
+ float ds=(farT-max(nearT,0.))/steps;
+ vec3 acc=vec3(0);float trans=1.;
+ for(int i=0;i<80;i++){
+  if(float(i)>=steps||trans<.015)break;
+  vec3 p=ro+rd*(max(nearT,0.)+(float(i)+.5)*ds);
+  float r0=length(p.yz);
+  if(p.x>-.78&&p.x<2.35&&r0<.085){
+   float hot=exp(-pow((p.x+.62)*3.,2.))*burn;
+   acc+=trans*(vec3(.08)+vec3(.12)*smoothstep(-.08,.08,p.y)+hot*vec3(.3,.045,.005));trans=0.;break;
+  }
+  vec3 adv=vec3(p.x*2.7-time*(.35+flow*.8),p.y*4.,p.z*4.);
+  float n=fbm(adv),fine=noise(adv*3.);
+  float tail=smoothstep(-.45,1.65,p.x);
+  vec2 bend=vec2(sin(p.x*3.-time*1.4),sin(p.x*2.7-time))*.075*tail;
+  float r=length(p.yz-bend);
+  float cap=sqrt(max(0.,1.-pow(min(p.x+.55,0.)/.82,2.)));
+  float radius=(.48+oxygen*.12+flow*.13)*cap*(1.-.32*smoothstep(.3,2.35,p.x));
+  radius+=(n-.5)*(.09+tail*.43);
+  float shell=exp(-pow((r-radius)/(.043+.04*tail),2.));
+  float env=smoothstep(-1.4,-1.15,p.x)*(1.-smoothstep(.35+flow*.25,2.1+flow*.25,p.x));
+  float density=(shell*2.5+exp(-pow(r/(max(radius,.001)),2.))*.14)*env*mix(1.,smoothstep(.23,.64,n),tail)*burn;
+  if(radius<.02)density=0.;
+  float heat=clamp(shell*.8+(1.-tail)*.25+fine*.15,0.,1.);
+  vec3 color=mix(vec3(.62,.018,.001),vec3(2.7,.45,.012),heat);
+  color=mix(color,vec3(3.2,1.4,.12),pow(heat,5.)*(1.-tail*.65));
+  float blue=exp(-pow((r-.115)/.035,2.))*env*burn*.4;
+  acc+=trans*(color*density+blue*vec3(.025,.12,.8))*ds*2.1;
+  trans*=exp(-density*ds*1.4);
+ }
+ gl_FragColor=vec4(pow(vec3(1.)-exp(-acc*1.25),vec3(.82)),1.);
+}`;
+type Props={onReady:()=>void;reduced:boolean;inputs:Inputs};
+export default function FlameScene({onReady,reduced,inputs}:Props){
  const host=useRef<HTMLDivElement>(null),api=useRef<{reset:()=>void;zoom:(n:number)=>void}|undefined>(undefined);
- const [paused,setPaused]=useState(false),[failed,setFailed]=useState(false);const pause=useRef(paused||reduced);
+ const [paused,setPaused]=useState(false),[failed,setFailed]=useState(false),[pending,setPending]=useState(true),[message,setMessage]=useState('Preparing flame view'),[failure,setFailure]=useState('');
+ const target=useRef({flow:.28,oxygen:.31,burn:0}),pause=useRef(paused||reduced);
  useEffect(()=>{pause.current=paused||reduced;},[paused,reduced]);
  useEffect(()=>{
+  const controller=new AbortController();setPending(true);setFailure('');
+  if(!Number.isFinite(inputs.ambient_o2_percent)||!Number.isFinite(inputs.flow_velocity_cms)){setPending(false);setFailure('Enter valid conditions.');target.current.burn=0;return;}
+  const timer=setTimeout(()=>{request<Prediction>('/api/predict',inputs,controller.signal).then(p=>{
+   if(controller.signal.aborted)return;
+   if(!p.supported){target.current.burn=0;setMessage('Outside experimental range');setFailure('Adjust conditions into the supported range.');return;}
+   target.current={flow:THREE.MathUtils.clamp(inputs.flow_velocity_cms/16.298,0,1),oxygen:THREE.MathUtils.clamp((inputs.ambient_o2_percent-13.5)/8.4,0,1),burn:p.flame_hazard_state===1?1:0};
+   setMessage(p.flame_hazard_state===1?'Sustained flame predicted':'Extinction predicted');
+  }).catch(e=>{if(!controller.signal.aborted){setFailure(e.message);setMessage('Flame update unavailable');target.current.burn=0;}}).finally(()=>{if(!controller.signal.aborted)setPending(false);});},350);
+  return()=>{clearTimeout(timer);controller.abort();};
+ },[inputs.ambient_o2_percent,inputs.flow_velocity_cms,inputs.fuel_thickness_mm]);
+ useEffect(()=>{
   const el=host.current;if(!el)return;let renderer:THREE.WebGLRenderer;
-  try{renderer=new THREE.WebGLRenderer({alpha:true,antialias:true,powerPreference:'low-power'});}catch{setFailed(true);onReady();return;}
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio,1.7));el.appendChild(renderer.domElement);
-  const scene=new THREE.Scene(),camera=new THREE.PerspectiveCamera(38,1,.1,100);camera.position.set(0,.45,7.5);
-  const orbit=new OrbitControls(camera,renderer.domElement);orbit.enablePan=false;orbit.enableDamping=true;orbit.minDistance=4;orbit.maxDistance=11;orbit.enableZoom=false;orbit.autoRotateSpeed=.35;
-  const group=new THREE.Group();scene.add(group);const count=window.innerWidth<600?1700:3000,positions=new Float32Array(count*3),colors=new Float32Array(count*3);
-  const warm=new THREE.Color('#dddddd'),cool=new THREE.Color('#777777');
-  for(let i=0;i<count;i++){const y=1-2*(i+.5)/count,rr=Math.sqrt(1-y*y),a=i*2.3999632297,r=1.55*(1+.025*Math.sin(i*.76));positions.set([Math.cos(a)*rr*r,y*r*.92,Math.sin(a)*rr*r],i*3);const c=positions[i*3]<-.65?cool:warm;colors.set([c.r,c.g,c.b],i*3);}
-  const geo=new THREE.BufferGeometry();geo.setAttribute('position',new THREE.BufferAttribute(positions,3));geo.setAttribute('color',new THREE.BufferAttribute(colors,3));
-  const mat=new THREE.PointsMaterial({size:.021,vertexColors:true,transparent:true,opacity:.88,sizeAttenuation:true});group.add(new THREE.Points(geo,mat));
-  const disposable:(THREE.BufferGeometry|THREE.Material)[]=[geo,mat];
-  for(const angle of [0,1.1,-.8]){const path=new THREE.EllipseCurve(0,0,2.0,.62,0,Math.PI*2,false,0);const g=new THREE.BufferGeometry().setFromPoints(path.getPoints(180));const m=new THREE.LineBasicMaterial({color:'#666666',transparent:true,opacity:.55});const ring=new THREE.LineLoop(g,m);ring.rotation.z=angle;ring.rotation.y=.25;group.add(ring);disposable.push(g,m);}
-  const rodGeo=new THREE.CylinderGeometry(.035,.035,1.15,16),rodMat=new THREE.MeshStandardMaterial({color:'#cccccc',metalness:.7,roughness:.35});const rod=new THREE.Mesh(rodGeo,rodMat);scene.add(rod);disposable.push(rodGeo,rodMat);scene.add(new THREE.AmbientLight('#ffffff',2));const light=new THREE.PointLight('#ffffff',30);light.position.set(2,3,4);scene.add(light);
-  const resize=()=>{const {width,height}=el.getBoundingClientRect();if(!width||!height)return;renderer.setSize(width,height);camera.aspect=width/height;camera.updateProjectionMatrix();renderer.render(scene,camera);};const observer=new ResizeObserver(resize);observer.observe(el);resize();
-  let visible=true,raf=0,last=0;const frame=(now:number)=>{raf=requestAnimationFrame(frame);if(document.hidden||!visible||now-last<30)return;last=now;orbit.autoRotate=!pause.current;orbit.update();renderer.render(scene,camera);};raf=requestAnimationFrame(frame);const io=new IntersectionObserver(([entry])=>visible=entry.isIntersecting);io.observe(el);
-  api.current={reset:()=>{camera.position.set(0,.45,7.5);orbit.target.set(0,0,0);orbit.update();},zoom:n=>{camera.position.multiplyScalar(n);const length=camera.position.length();camera.position.setLength(THREE.MathUtils.clamp(length,4,11));orbit.update();}};
+  try{renderer=new THREE.WebGLRenderer({alpha:false,antialias:false,powerPreference:'low-power'});}catch{setFailed(true);onReady();return;}
+  renderer.setPixelRatio(Math.min(devicePixelRatio,innerWidth<600?1:1.4));el.appendChild(renderer.domElement);
+  const camera=new THREE.PerspectiveCamera(38,1,.1,100);camera.position.set(0,.65,6.2);
+  const controls=new OrbitControls(camera,renderer.domElement);controls.enablePan=false;controls.enableDamping=true;controls.enableZoom=false;controls.minDistance=4;controls.maxDistance=10;controls.target.set(.25,0,0);controls.update();
+  const scene=new THREE.Scene(),screen=new THREE.OrthographicCamera(-1,1,1,-1,0,1);
+  const uniforms={resolution:{value:new THREE.Vector2(1,1)},eye:{value:camera.position},basis:{value:camera.matrixWorld},time:{value:0},flow:{value:.28},oxygen:{value:.31},burn:{value:0},steps:{value:innerWidth<600?48:72}};
+  const geometry=new THREE.PlaneGeometry(2,2),material=new THREE.ShaderMaterial({uniforms,vertexShader:'varying vec2 vUv;void main(){vUv=uv;gl_Position=vec4(position.xy,0.,1.);}',fragmentShader:fragment,depthTest:false,depthWrite:false});
+  scene.add(new THREE.Mesh(geometry,material));
+  const resize=()=>{const {width,height}=el.getBoundingClientRect();if(!width||!height)return;renderer.setSize(width,height);uniforms.resolution.value.set(width,height);};const observer=new ResizeObserver(resize);observer.observe(el);resize();
+  let raf=0,last=0,visible=true;const io=new IntersectionObserver(([entry])=>{visible=entry.isIntersecting;last=0;});io.observe(el);
+  const frame=(now:number)=>{raf=requestAnimationFrame(frame);if(document.hidden||!visible){last=0;return;}if(last&&now-last<25)return;const dt=last?Math.min((now-last)/1000,.06):.025;last=now;if(!pause.current)uniforms.time.value+=dt;
+   const mix=1.-Math.exp(-dt*3.5);for(const key of ['flow','oxygen','burn'] as const)uniforms[key].value=THREE.MathUtils.lerp(uniforms[key].value,target.current[key],mix);
+   controls.update();camera.updateMatrixWorld();renderer.render(scene,screen);
+  };raf=requestAnimationFrame(frame);
+  api.current={reset:()=>{camera.position.set(0,.65,6.2);controls.target.set(.25,0,0);controls.update();},zoom:n=>{camera.position.sub(controls.target).multiplyScalar(n).clampLength(4,10).add(controls.target);controls.update();}};
   const lost=(e:Event)=>{e.preventDefault();setFailed(true);};renderer.domElement.addEventListener('webglcontextlost',lost);onReady();
-  return()=>{cancelAnimationFrame(raf);observer.disconnect();io.disconnect();orbit.dispose();disposable.forEach(x=>x.dispose());renderer.dispose();renderer.domElement.removeEventListener('webglcontextlost',lost);renderer.domElement.remove();api.current=undefined;};
+  return()=>{cancelAnimationFrame(raf);io.disconnect();observer.disconnect();controls.dispose();geometry.dispose();material.dispose();renderer.dispose();renderer.domElement.remove();api.current=undefined;};
  },[onReady]);
- return <div className="scene-wrap"><div className="scene-header"><span>02 / COMBUSTION FIELD</span><span>μg / 3D</span></div><div ref={host} className="scene-canvas" role="img" aria-label="Conceptual spherical flame envelope around a PMMA rod. Drag to rotate. Colors do not measure temperature."/>{failed&&<div className="scene-fallback"><div className="static-orb"/><p>Static flame concept · 3D unavailable</p></div>}<div className="scene-caption"><span className="specimen-tag">PMMA <b>6.35 mm</b></span><p>Drag to orbit · use + / − to zoom</p></div><div className="scene-toolbar"><span>CONCEPTUAL VIEW · NOT A PHYSICS SIMULATION</span><div><button className="icon-button" aria-label="Zoom in" onClick={()=>api.current?.zoom(.9)}><Plus size={15}/></button><button className="icon-button" aria-label="Zoom out" onClick={()=>api.current?.zoom(1.1)}><Minus size={15}/></button><button className="icon-button" aria-label="Reset 3D view" onClick={()=>api.current?.reset()}><RotateCcw size={15}/></button><button className="icon-button" aria-label={paused?'Resume motion':'Pause motion'} disabled={reduced} onClick={()=>setPaused(!paused)}>{paused||reduced?<Play size={15}/>:<Pause size={15}/>}</button></div></div></div>;
+ return <div className="scene-wrap flame-volume"><div className="scene-header"><span>02 / INTERACTIVE FLAME</span><span>μg / LIVE VIEW</span></div><div ref={host} className="scene-canvas" role="img" aria-label="Physics-inspired flame around a horizontal PMMA rod. Drag to rotate. Shape and colors are illustrative."/>{failed&&<div className="scene-fallback"><p>Interactive rendering unavailable.<br/>Predictions remain available in the results panel.</p></div>}{pending&&<div className="flame-loading" role="status"><span className="flame-spinner"/>Updating conditions</div>}<div className="scene-caption" aria-live="polite"><span className="specimen-tag">{message}</span><p>{failure||'PMMA · 6.35 mm / Drag to orbit'}</p></div><div className="scene-toolbar"><span>PHYSICS-INSPIRED · SHAPE & COLOR ILLUSTRATIVE</span><div><button className="icon-button" aria-label="Zoom in" onClick={()=>api.current?.zoom(.9)}><Plus size={15}/></button><button className="icon-button" aria-label="Zoom out" onClick={()=>api.current?.zoom(1.1)}><Minus size={15}/></button><button className="icon-button" aria-label="Reset 3D view" onClick={()=>api.current?.reset()}><RotateCcw size={15}/></button><button className="icon-button" aria-label={paused?'Resume motion':'Pause motion'} disabled={reduced} onClick={()=>setPaused(!paused)}>{paused||reduced?<Play size={15}/>:<Pause size={15}/>}</button></div></div></div>;
 }
