@@ -29,5 +29,5 @@ ESA/NASA photograph: https://www.esa.int/media/microgravity-flame
 Challenge: https://www.spaceappschallenge.org/2026/challenges/flame-in-freefall/
 
 REPOSITORY
-https://github.com/Dakshp-dp/nocura-next
-The redesign repository is private at present. Source links require collaborator access.
+https://github.com/soul2024quest/nocura
+Production frontend branch: codex/orbital-laboratory.
