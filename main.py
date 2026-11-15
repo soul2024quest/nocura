@@ -44,7 +44,7 @@ PSI_INVESTIGATIONS: List[Dict[str, Any]] = [
         "facility": "Microgravity Science Glovebox (MSG), ISS",
         "fuels": ["Cast PMMA rods (6.35 mm)", "PMMA slabs & spheres", "SIBAL cotton-fiberglass", "Nomex"],
         "oxygen_range_percent": [13.5, 21.9],
-        "flow_velocity_range_cms": [0.106, 40.0],         
+        "flow_velocity_range_cms": [0.106, 40.0],
         "flow_regime": "Opposed and concurrent forced flow (low-velocity wind tunnel)",
         "primary_sensors": ["Color video camera", "Radiometer", "CSA-CP & CDM gas/smoke sensors"],
         "key_findings": (
@@ -147,6 +147,14 @@ class TelemetryRequest(BaseModel):
         return v
 
 
+class FollowUpRequest(BaseModel):
+    ambient_o2_percent: float = Field(..., description="Ambient oxygen mole fraction (%)")
+    flow_velocity_cms: float = Field(..., description="Forced convective airflow velocity (cm/s)")
+    fuel_thickness_mm: Optional[float] = Field(default=6.35)
+    question: str = Field(..., min_length=2, max_length=500, description="Scenario follow-up question")
+    previous_briefing: Optional[str] = Field(default=None, max_length=2500)
+
+
 def validate_supported_envelope(req: TelemetryRequest) -> List[str]:
     """Return list of out-of-envelope violations if inputs exceed supported experimental scope."""
     violations: List[str] = []
@@ -247,8 +255,9 @@ def build_grounded_fallback(
     """Plain-English astronaut cabin briefing when Groq API is unavailable."""
     if predicted_state == 1:
         status_line = (
-            "Sustained flame predicted. A flame on the tested PMMA material is expected to keep burning "
-            "under these conditions. An ongoing fire needs immediate response under the spacecraft fire procedure."
+            f"At {o2:.1f}% oxygen and {flow:.3f} cm/s cabin airflow, any ignition on solid materials "
+            f"will stay lit and spread steadily (flame score: {score:.2f}). Because there is no gravity "
+            f"to pull hot air upward, the cabin ventilation fan is actively pushing fresh oxygen straight into the flame."
         )
         actions = (
             "1. Kill local ventilation fans in the affected rack or module immediately to starve the flame of oxygen.\n"
@@ -256,18 +265,25 @@ def build_grounded_fallback(
             "3. Grab a CO2 or fine-water-mist extinguisher, aim directly at the base of the burning material, and monitor for invisible smoldering or smoke buildup."
         )
     else:
+        if flow < 0.45:
+            reason = "the cabin air is moving too slowly to bring fresh oxygen to the flame, so it suffocates and cools out on its own"
+        elif flow > 8.0:
+            reason = "the airflow is strong enough to blow hot fuel gases away before they can keep burning"
+        else:
+            reason = "the oxygen level is too low to keep a flame alive at this air speed"
         status_line = (
-            "No sustained fire predicted for the tested PMMA material under these conditions. "
-            "No immediate action is indicated by this prediction."
+            f"At {o2:.1f}% oxygen and {flow:.3f} cm/s cabin airflow, a flame will not sustain itself "
+            f"(flame score: {score:.2f}). Physically, {reason}."
         )
         actions = (
-            "A precautionary check for smoke, smoldering, or hot spots is optional. "
-            "An actual alarm, smoke, or visible flame still requires the spacecraft fire procedure."
+            "1. Keep ventilation steady—do not suddenly crank up fan speeds, which could push fresh oxygen onto a hot surface and reignite it.\n"
+            "2. Inspect the area for lingering smoke, toxic fumes, or hot spots, since microgravity fires can still smolder without a visible flame.\n"
+            "3. Power down any suspected faulty hardware and log the cabin sensor readings."
         )
 
     return (
         f"What Is Happening in the Spacecraft\n"
-        f"{status_line}\n\n"
+        f"{status_line} {regime_info['physical_interpretation']}\n\n"
         f"Astronaut Actions\n"
         f"{actions}"
     )
@@ -439,32 +455,27 @@ async def briefing_endpoint(req: TelemetryRequest) -> Dict[str, Any]:
 
     system_prompt = (
         "You are an onboard spacecraft fire-safety assistant speaking directly to an astronaut in orbit. "
-        "Give a concise, operationally relevant status briefing in plain, everyday English: "
-        "state the supplied predicted flame outcome and the response it calls for.\n"
+        "Explain in plain, everyday English what is physically happening to a flame inside the microgravity cabin "
+        "and tell the astronaut exactly what actions to take right now.\n"
         "Strict rules:\n"
         "1. Do NOT cite research papers, NASA report numbers, PSI IDs, or dataset statistics.\n"
         "2. Do NOT use machine learning terms (no 'score', 'logits', 'model', 'dataset', or 'weights').\n"
         "3. Do NOT use markdown bolding (**) anywhere in your response.\n"
-        "4. In 'What Is Happening in the Spacecraft', use at most three short sentences stating the supplied "
-        "prediction: sustained flame means burning is expected to continue; extinction means burning is expected "
-        "to die out. Keep the prediction limited to the tested PMMA material. Do NOT add a 'Fire status' label "
-        "or discuss confirmation or detection. Do NOT explain physics, buoyancy, or oxygen transport.\n"
+        "4. Explain the real microgravity physics simply: without gravity, hot air does not rise, so cabin fans "
+        "control whether a flame suffocates (too little airflow), burns steadily (gentle airflow + enough oxygen), "
+        "or gets blown out (high airflow).\n"
         "5. Give 3 clear, practical crew actions (managing cabin ventilation fans, cutting power to hot gear, "
         "checking for invisible smoldering/smoke, or using a spacecraft fire extinguisher if a flame is sustained).\n"
-        "6. Use exactly two short headings: 'What Is Happening in the Spacecraft' and 'Astronaut Actions'.\n"
-        "7. Actions MUST match the supplied outcome. For sustained burning, prioritize immediate response to "
-        "an ongoing fire under the spacecraft fire procedure; do not give routine monitoring as the only response. "
-        "For extinction, say no immediate action is indicated by the prediction and a precautionary check is optional; "
-        "do not prescribe three mandatory actions. Do not invent fan settings or "
-        "vehicle-specific emergency commands; defer those to the spacecraft procedure."
+        "6. Use exactly two short headings: 'What Is Happening in the Spacecraft' and 'Astronaut Actions'."
     )
 
     user_prompt = (
         f"Current Cabin Sensor Readings:\n"
         f"- Cabin Oxygen: {req.ambient_o2_percent}%\n"
         f"- Cabin Airflow Speed: {req.flow_velocity_cms} cm/s\n"
-        f"- Experimental result for the tested PMMA material if ignited: {'sustained burning predicted' if predicted_state == 1 else 'sustained burning not predicted'}\n"
-        "State this predicted outcome directly without confirmation wording, then give three matching crew actions."
+        f"- Flame Status: {'SUSTAINED FLAME (will keep burning and spreading)' if predicted_state == 1 else 'SELF-EXTINGUISHING (flame will die out)'}\n"
+        f"- Physical Condition: {regime_info['physical_interpretation']}\n"
+        f"Tell the astronaut what is physically happening and what actions to take."
     )
 
     payload = {
@@ -503,15 +514,6 @@ async def briefing_endpoint(req: TelemetryRequest) -> Dict[str, Any]:
             logger.warning("Groq output empty after stripping think tags; falling back.")
             raise ValueError("Empty LLM output")
 
-        # Keep status and urgency tied to the actual prediction, rather than an LLM paraphrase.
-        sections = content.split("Astronaut Actions", 1)
-        if len(sections) != 2:
-            raise ValueError("Briefing missing Astronaut Actions section")
-        content = (
-            fallback_text if predicted_state == 0 else
-            fallback_text.split("Astronaut Actions", 1)[0] + "Astronaut Actions" + sections[1]
-        )
-
         return {
             "status": "supported",
             "supported": True,
@@ -533,4 +535,111 @@ async def briefing_endpoint(req: TelemetryRequest) -> Dict[str, Any]:
             "briefing": fallback_text,
             "source": "local_fallback_error",
             "fallback_reason": str(exc),
+        }
+
+
+@app.post("/api/followup")
+async def followup_endpoint(req: FollowUpRequest) -> Dict[str, Any]:
+    telemetry = TelemetryRequest(
+        ambient_o2_percent=req.ambient_o2_percent,
+        flow_velocity_cms=req.flow_velocity_cms,
+        fuel_thickness_mm=req.fuel_thickness_mm,
+    )
+    violations = validate_supported_envelope(telemetry)
+    if violations:
+        return {
+            "status": "outside_supported_conditions",
+            "supported": False,
+            "reasons": violations,
+            "answer": (
+                f"Cabin sensor readings are outside the verified {O2_MIN}%-{O2_MAX}% O2 and "
+                f"{FLOW_MIN}-{FLOW_MAX} cm/s operating range. Adjust sensors back inside limits before asking scenario questions."
+            ),
+            "source": "envelope_guard",
+        }
+
+    score = compute_sustained_flame_score(req.ambient_o2_percent, req.flow_velocity_cms)
+    predicted_state = 1 if score >= 0.5 else 0
+    regime_info = classify_experimental_regime(score, req.flow_velocity_cms)
+
+    fallback_answer = (
+        f"At {req.ambient_o2_percent:.1f}% O2 and {req.flow_velocity_cms:.3f} cm/s airflow, "
+        f"the cabin is in the {regime_info['regime_label']}. {regime_info['physical_interpretation']} "
+        f"Keep local rack ventilation isolated, shut power to overheating gear, and check for hidden smoldering."
+    )
+
+    if not GROQ_API_KEY:
+        return {
+            "status": "supported",
+            "supported": True,
+            "flame_hazard_state": predicted_state,
+            "sustained_flame_score": score,
+            "answer": fallback_answer,
+            "source": "local_fallback_no_key",
+        }
+
+    system_prompt = (
+        "You are an onboard spacecraft fire-safety assistant answering a follow-up question "
+        "during an active cabin scenario. Keep your answer under 120 words, in plain everyday English.\n"
+        "Strict rules:\n"
+        "1. Stay strictly grounded in the provided cabin oxygen, airflow speed, and flame status.\n"
+        "2. Do NOT use markdown bolding (**) or bullet symbols that clutter plain text.\n"
+        "3. Do NOT cite research papers, NASA report numbers, PSI IDs, or machine learning terms.\n"
+        "4. Focus on practical microgravity fire physics (no buoyancy, fan-driven oxygen feed, invisible smoldering) and crew safety."
+    )
+
+    user_prompt = (
+        f"Cabin Oxygen: {req.ambient_o2_percent}%\n"
+        f"Cabin Airflow Speed: {req.flow_velocity_cms} cm/s\n"
+        f"Flame Status: {'SUSTAINED FLAME' if predicted_state == 1 else 'SELF-EXTINGUISHING'}\n"
+        f"Physical Regime: {regime_info['physical_interpretation']}\n"
+        f"Previous Briefing: {req.previous_briefing or 'None'}\n\n"
+        f"Follow-up Question: {req.question.strip()}"
+    )
+
+    payload = {
+        "model": QWEN_MODEL,
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ],
+        "temperature": 0.25,
+        "max_tokens": 450,
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.post(
+                "https://api.groq.com/openai/v1/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {GROQ_API_KEY}",
+                    "Content-Type": "application/json",
+                },
+                json=payload,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+
+        raw_content = ((data.get("choices") or [{}])[0].get("message") or {}).get("content", "")
+        content = re.sub(r"<think>.*?</think>", "", raw_content, flags=re.DOTALL).strip()
+        if not content:
+            raise ValueError("Empty LLM output")
+
+        return {
+            "status": "supported",
+            "supported": True,
+            "flame_hazard_state": predicted_state,
+            "sustained_flame_score": score,
+            "answer": content,
+            "source": f"groq:{QWEN_MODEL}",
+        }
+    except Exception as exc:
+        logger.error("Follow-up request failed (%s); serving fallback.", exc)
+        return {
+            "status": "supported",
+            "supported": True,
+            "flame_hazard_state": predicted_state,
+            "sustained_flame_score": score,
+            "answer": fallback_answer,
+            "source": "local_fallback_error",
         }
