@@ -454,9 +454,10 @@ async def briefing_endpoint(req: TelemetryRequest) -> Dict[str, Any]:
         }
 
     system_prompt = (
-        "You are an onboard spacecraft fire-safety assistant speaking directly to an astronaut in orbit. "
-        "Explain in plain, everyday English what is physically happening to a flame inside the microgravity cabin "
-        "and tell the astronaut exactly what actions to take right now.\n"
+        "You are an interactive onboard spacecraft fire-safety assistant speaking directly to an astronaut in orbit. "
+        "Explain in plain, everyday English what is physically happening to a flame inside the microgravity cabin, "
+        "tell the astronaut what actions to take right now, and remain ready to answer follow-up 'what-if' scenario questions "
+        "about ventilation changes, oxygen shifts, smoldering, or suppression.\n"
         "Strict rules:\n"
         "1. Do NOT cite research papers, NASA report numbers, PSI IDs, or dataset statistics.\n"
         "2. Do NOT use machine learning terms (no 'score', 'logits', 'model', 'dataset', or 'weights').\n"
@@ -466,7 +467,7 @@ async def briefing_endpoint(req: TelemetryRequest) -> Dict[str, Any]:
         "or gets blown out (high airflow).\n"
         "5. Give 3 clear, practical crew actions (managing cabin ventilation fans, cutting power to hot gear, "
         "checking for invisible smoldering/smoke, or using a spacecraft fire extinguisher if a flame is sustained).\n"
-        "6. Use exactly two short headings: 'What Is Happening in the Spacecraft' and 'Astronaut Actions'."
+        "6. Use exactly two short headings: 'What Is Happening in the Spacecraft' and 'Astronaut Actions', followed by a single short closing line inviting follow-up scenario questions."
     )
 
     user_prompt = (
@@ -579,22 +580,24 @@ async def followup_endpoint(req: FollowUpRequest) -> Dict[str, Any]:
         }
 
     system_prompt = (
-        "You are an onboard spacecraft fire-safety assistant answering a follow-up question "
-        "during an active cabin scenario. Keep your answer under 120 words, in plain everyday English.\n"
+        "You are an interactive onboard spacecraft fire-safety assistant answering follow-up questions "
+        "from an astronaut or mission evaluator during an active microgravity cabin scenario. "
+        "Keep your response concise (under 130 words) and written in plain, everyday English.\n"
         "Strict rules:\n"
-        "1. Stay strictly grounded in the provided cabin oxygen, airflow speed, and flame status.\n"
-        "2. Do NOT use markdown bolding (**) or bullet symbols that clutter plain text.\n"
-        "3. Do NOT cite research papers, NASA report numbers, PSI IDs, or machine learning terms.\n"
-        "4. Focus on practical microgravity fire physics (no buoyancy, fan-driven oxygen feed, invisible smoldering) and crew safety."
+        "1. Anchor every answer strictly in the provided cabin oxygen, airflow speed, and flame status, while directly answering the user's specific 'what-if' or operational follow-up question.\n"
+        "2. Explain what would physically happen next if the user proposes changing fan speed, oxygen, power, or suppression based on microgravity combustion physics (no buoyancy, fan-fed oxygen vs. radiative quenching vs. blowoff, and hidden smoldering).\n"
+        "3. Do NOT use markdown bolding (**) or cluttering formatting.\n"
+        "4. Do NOT cite research papers, NASA report numbers, PSI IDs, or machine learning terms."
     )
 
     user_prompt = (
-        f"Cabin Oxygen: {req.ambient_o2_percent}%\n"
-        f"Cabin Airflow Speed: {req.flow_velocity_cms} cm/s\n"
-        f"Flame Status: {'SUSTAINED FLAME' if predicted_state == 1 else 'SELF-EXTINGUISHING'}\n"
-        f"Physical Regime: {regime_info['physical_interpretation']}\n"
-        f"Previous Briefing: {req.previous_briefing or 'None'}\n\n"
-        f"Follow-up Question: {req.question.strip()}"
+        f"Active Cabin Telemetry:\n"
+        f"- Cabin Oxygen: {req.ambient_o2_percent}%\n"
+        f"- Cabin Airflow Speed: {req.flow_velocity_cms} cm/s\n"
+        f"- Flame Status: {'SUSTAINED FLAME (will keep burning and spreading)' if predicted_state == 1 else 'SELF-EXTINGUISHING (flame will die out)'}\n"
+        f"- Physical Regime: {regime_info['physical_interpretation']}\n"
+        f"- Previous Briefing Context: {req.previous_briefing or 'None'}\n\n"
+        f"User Follow-Up Question: {req.question.strip()}"
     )
 
     payload = {
@@ -604,7 +607,7 @@ async def followup_endpoint(req: FollowUpRequest) -> Dict[str, Any]:
             {"role": "user", "content": user_prompt},
         ],
         "temperature": 0.25,
-        "max_tokens": 450,
+        "max_tokens": 500,
     }
 
     try:
