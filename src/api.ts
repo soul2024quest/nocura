@@ -3,9 +3,10 @@ export type Prediction = { supported: boolean; reasons?: string[]; flame_hazard_
 export type Briefing = { supported: boolean; briefing: string; source: string };
 export type Investigation = { psi_id: string; title: string; facility: string; fuels: string[]; oxygen_range_percent: number[]; flow_velocity_range_cms: number[]; primary_sensors: string[]; key_findings: string; citation: string; source_url: string; fire_safety_relevance_score: number };
 export type Metadata = { model_version: string; telemetry_bounds: Record<string,{min:number;max:number}>; fuel_baseline_mm: number; evaluation_metrics: {test_accuracy:number}; provenance: {limitations:string;source_url:string;ntrs_citation:string} };
-export type FollowUpPayload = Inputs & {question:string;previous_briefing:string};
+export type BriefingPayload = Inputs & {use_ai:boolean};
+export type FollowUpPayload = BriefingPayload & {question:string;previous_briefing:string};
 export type FollowUpAnswer = {supported:boolean;answer:string;source:string};
-export async function request<T>(path: string, body?: Inputs | FollowUpPayload, signal?: AbortSignal): Promise<T> {
+export async function request<T>(path: string, body?: Inputs | BriefingPayload | FollowUpPayload, signal?: AbortSignal): Promise<T> {
   const controller = new AbortController();
   const cancel = () => controller.abort();
   signal?.addEventListener('abort', cancel, {once:true});

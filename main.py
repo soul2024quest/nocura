@@ -125,6 +125,7 @@ app.add_middleware(
 
 
 class TelemetryRequest(BaseModel):
+    use_ai: bool = Field(default=True, description="Use Qwen for this request; false demonstrates local fallback")
     ambient_o2_percent: float = Field(..., description="Ambient oxygen mole fraction (%)")
     flow_velocity_cms: float = Field(..., description="Forced convective airflow velocity (cm/s)")
     fuel_thickness_mm: Optional[float] = Field(
@@ -441,7 +442,7 @@ async def briefing_endpoint(req: TelemetryRequest) -> Dict[str, Any]:
         req.ambient_o2_percent, req.flow_velocity_cms, score, predicted_state, regime_info
     )
 
-    if not GROQ_API_KEY:
+    if not req.use_ai or not GROQ_API_KEY:
         logger.info("GROQ_API_KEY not configured; serving plain-English astronaut fallback.")
         return {
             "status": "supported",
@@ -450,7 +451,7 @@ async def briefing_endpoint(req: TelemetryRequest) -> Dict[str, Any]:
             "sustained_flame_score": score,
             "regime_label": regime_info["regime_label"],
             "briefing": fallback_text,
-            "source": "local_fallback_no_key",
+            "source": "local_fallback_disabled" if not req.use_ai else "local_fallback_no_key",
         }
 
     system_prompt = (
@@ -584,14 +585,22 @@ async def followup_endpoint(req: FollowUpRequest) -> Dict[str, Any]:
         "Please retry later or consult the experimental sources."
     )
 
-    if not GROQ_API_KEY:
+    if not req.use_ai:
+        fallback_answer = fallback_answer.replace(
+            "The follow-up answer service is unavailable, so I cannot answer your specific question right now. "
+            "Please retry later or consult the experimental sources.",
+            "Qwen is switched off for this demonstration. This local fallback provides scenario context; "
+            "switch Qwen on to answer your specific follow-up question."
+        )
+
+    if not req.use_ai or not GROQ_API_KEY:
         return {
             "status": "supported",
             "supported": True,
             "flame_hazard_state": predicted_state,
             "sustained_flame_score": score,
             "answer": fallback_answer,
-            "source": "local_fallback_no_key",
+            "source": "local_fallback_disabled" if not req.use_ai else "local_fallback_no_key",
         }
 
     system_prompt = (
