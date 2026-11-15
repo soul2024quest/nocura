@@ -1,0 +1,33 @@
+NOCURA / RESEARCH NOTES
+Educational prototype for the NASA Space Apps Challenge 2026.
+
+SCOPE
+Two inputs: oxygen (13.5–21.9%) and airflow (0.106–16.298 cm/s).
+Fixed baseline: 6.35 mm PMMA solid rod in microgravity stagnation-flame experiments.
+The model was trained on 51 digitized experimental points.
+
+RECORDED EVALUATION
+Model version: 2.2.0-bass2-logflow.
+11 held-out samples: 8 correct, 3 incorrect. Accuracy: 72.73%.
+Confusion matrix (rows actual extinction, sustained; columns predicted extinction, sustained):
+2, 3
+0, 6
+Small-sample results do not establish operational spacecraft fire-safety reliability.
+
+OUTPUT BOUNDARIES
+The predictor estimates sustained burning or extinction for the fixed specimen.
+Its score is not a calibrated probability of a cabin fire.
+The procedural 3D flame is a physics-inspired illustration, not a combustion solver.
+Shape, colour, movement and temperature are not predicted measurements.
+AI and fallback briefings are interpretations, not fire detection or certified crew procedures.
+The ESA/NASA photograph is a fixed experimental reference; its source does not specify matching oxygen and airflow values.
+
+SOURCES
+NASA BASS-II / PSI-25: https://psi.nasa.gov/physci/repo/data/investigations/PSI-25
+NASA research record: https://ntrs.nasa.gov/citations/20160000593
+ESA/NASA photograph: https://www.esa.int/media/microgravity-flame
+Challenge: https://www.spaceappschallenge.org/2026/challenges/flame-in-freefall/
+
+REPOSITORY
+https://github.com/Dakshp-dp/nocura-next
+The redesign repository is private at present. Source links require collaborator access.
