@@ -30,3 +30,14 @@ html.lenis,html.lenis body{scroll-behavior:auto!important}
 .story-narrative{display:grid}
 .story-chapter-copy{grid-area:1 / 1;visibility:hidden;opacity:0;pointer-events:none;transition:opacity .3s ease}
 .story-chapter-copy.is-active{visibility:visible;opacity:1;pointer-events:auto}
+
+/* Fit the reserved chapter copy to its column instead of reserving a hidden third title line. */
+.story-copy{container-type:inline-size}
+.story-narrative{grid-template-columns:minmax(0,1fr)}
+.story-chapter-copy{min-width:0}
+@media(min-width:651px){
+ .story-copy h1,.story-copy h2{font-size:clamp(40px,12cqw,86px);letter-spacing:-.045em;line-height:1.04;margin-bottom:22px}
+ .story-copy .eyebrow{margin-bottom:22px}
+ .story-chapter-copy>p{margin-bottom:22px}
+}
+@media(min-width:951px){.story-copy{top:18%}}
