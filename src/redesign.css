@@ -19,3 +19,5 @@ body{background:#0b0b0a}::selection{background:#dcdcd0;color:#111}html{scroll-pa
 @media(min-width:651px){.story-flame{left:5%;width:95%}}
 .story-flame{mask-image:radial-gradient(ellipse at center,#000 48%,transparent 76%)}
 @media(max-width:650px){.header nav{scrollbar-width:none;gap:0}.header nav::-webkit-scrollbar{display:none}.header nav button,.header nav .nav-about{flex:1;font-size:8px;padding:8px 6px;min-height:35px}}
+
+.boot-error{max-width:300px;text-align:center;margin-top:20px}.boot-error p{font-size:12px;color:#aaa;line-height:1.8}.boot-error .secondary{display:inline-flex;gap:16px}

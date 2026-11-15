@@ -1,4 +1,4 @@
-import {useRef,useState} from 'react';
+import {useEffect,useRef,useState} from 'react';
 import {motion,useMotionValueEvent,useScroll,useTransform} from 'motion/react';
 import {ArrowDown,ArrowDownRight,ArrowRight,ArrowUpRight,Wind,FlaskConical,Layers} from 'lucide-react';
 import type {Inputs} from './api';
@@ -16,10 +16,19 @@ export const scenarios=[
  {name:'Explore faster airflow',tag:'03 / VENTILATION',oxygen:16.1,flow:16.298,description:'Keep oxygen fixed and move airflow to the supported maximum. Find out what the estimator returns.'},
 ];
 
-type Props={reduced:boolean;onEnter:()=>void;onScenario:(inputs:Inputs)=>void;onEvidence:()=>void;onResearch:()=>void};
+type Props={onReady:()=>void;onError:()=>void;reduced:boolean;onEnter:()=>void;onScenario:(inputs:Inputs)=>void;onEvidence:()=>void;onResearch:()=>void};
 
-export default function Story({reduced,onEnter,onScenario,onEvidence,onResearch}:Props){
+export default function Story({onReady,onError,reduced,onEnter,onScenario,onEvidence,onResearch}:Props){
  const track=useRef<HTMLElement>(null);
+ const flamePhoto=useRef<HTMLImageElement>(null);
+ useEffect(()=>{
+  let active=true,frame=0;
+  const image=flamePhoto.current;
+  if(!image)return;
+  // Wait for the actual displayed image to be downloaded and decoded, including cached images.
+  image.decode().then(()=>{if(active)frame=requestAnimationFrame(()=>{if(active)onReady();});}).catch(()=>{if(active)onError();});
+  return()=>{active=false;cancelAnimationFrame(frame);};
+ },[onReady,onError]);
  const [chapter,setChapter]=useState(0);
  const {scrollYProgress}=useScroll({target:track,offset:['start start','end end']});
  useMotionValueEvent(scrollYProgress,'change',value=>{const next=Math.min(3,Math.floor(value*4));setChapter(previous=>previous===next?previous:next);});
@@ -43,7 +52,7 @@ export default function Story({reduced,onEnter,onScenario,onEvidence,onResearch}
      <motion.div className="orbit-instrument" style={reduced?undefined:{rotate:ringRotate}} aria-hidden="true">
       <svg viewBox="0 0 600 600" fill="none"><circle cx="300" cy="300" r="272"/><circle cx="300" cy="300" r="262" strokeDasharray="1 17"/><circle cx="300" cy="300" r="220"/><ellipse cx="300" cy="300" rx="220" ry="83" transform="rotate(-25 300 300)"/><ellipse cx="300" cy="300" rx="90" ry="220" transform="rotate(-25 300 300)"/><path d="M15 300h45m480 0h45M300 15v45m0 480v45M100 100l25 25m350 350 25 25M100 500l25-25m350-350 25-25"/><circle cx="300" cy="300" r="4"/></svg>
      </motion.div>
-     <motion.figure className="story-flame" style={reduced?undefined:{x:imageX,scale:imageScale}}><img src="/bass-ii-esa-nasa.jpg" alt="Real BASS-II microgravity flame: a rounded front and curling flame around a dark solid specimen." fetchPriority="high" width="1024" height="575"/></motion.figure>
+     <motion.figure className="story-flame" style={reduced?undefined:{x:imageX,scale:imageScale}}><img ref={flamePhoto} src="/bass-ii-esa-nasa.jpg" alt="Real BASS-II microgravity flame: a rounded front and curling flame around a dark solid specimen." fetchPriority="high" width="1024" height="575"/></motion.figure>
      <span className="specimen-callout"><i/>BASS-II / ISS<br/><small>EXPERIMENT PHOTOGRAPH</small></span>
      <div className="visual-axis" aria-hidden="true"><span>μg</span><div/><span>MICROGRAVITY</span></div>
     </div>
