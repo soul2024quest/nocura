@@ -21,3 +21,6 @@ body{background:#0b0b0a}::selection{background:#dcdcd0;color:#111}html{scroll-pa
 @media(max-width:650px){.header nav{scrollbar-width:none;gap:0}.header nav::-webkit-scrollbar{display:none}.header nav button,.header nav .nav-about{flex:1;font-size:8px;padding:8px 6px;min-height:35px}}
 
 .boot-error{max-width:300px;text-align:center;margin-top:20px}.boot-error p{font-size:12px;color:#aaa;line-height:1.8}.boot-error .secondary{display:inline-flex;gap:16px}
+
+/* Lenis owns wheel easing; avoid layering native CSS smooth scrolling over it. */
+html.lenis,html.lenis body{scroll-behavior:auto!important}

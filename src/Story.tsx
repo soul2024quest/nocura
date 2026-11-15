@@ -2,6 +2,7 @@ import {useEffect,useRef,useState} from 'react';
 import {motion,useMotionValueEvent,useScroll,useTransform} from 'motion/react';
 import {ArrowDown,ArrowDownRight,ArrowRight,ArrowUpRight,Wind,FlaskConical,Layers} from 'lucide-react';
 import type {Inputs} from './api';
+import {scrollPageTo} from './smoothScroll';
 
 const chapters=[
  {label:'A different world',kicker:'01 / THE QUESTION',title:<>What happens<br/>to fire <em>in space?</em></>,body:'The danger is familiar. The environment is not. Explore how oxygen and airflow can change whether a flame keeps burning in microgravity.'},
@@ -35,7 +36,7 @@ export default function Story({onReady,onError,reduced,onEnter,onScenario,onEvid
  const imageX=useTransform(scrollYProgress,[0,.35,.7,1],['4%','-3%','-7%','0%']);
  const imageScale=useTransform(scrollYProgress,[0,.35,.7,1],[.88,1,1.12,.95]);
  const ringRotate=useTransform(scrollYProgress,[0,1],[-24,36]);
- function jump(index:number){const el=track.current;if(!el)return;const top=window.scrollY+el.getBoundingClientRect().top;window.scrollTo({top:top+(el.offsetHeight-window.innerHeight)*(index/4+.025),behavior:reduced?'instant':'smooth'});}
+ function jump(index:number){const el=track.current;if(!el)return;const top=window.scrollY+el.getBoundingClientRect().top;scrollPageTo(top+(el.offsetHeight-window.innerHeight)*(index/4+.025),reduced);}
  return <div className="discovery">
   <section className={`story-track${reduced?' story-reduced':''}`} ref={track} aria-label="The story of fire in microgravity">
    <div className="story-stage">
