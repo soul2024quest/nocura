@@ -147,6 +147,14 @@ class TelemetryRequest(BaseModel):
         return v
 
 
+class FollowUpRequest(BaseModel):
+    ambient_o2_percent: float = Field(..., description="Ambient oxygen mole fraction (%)")
+    flow_velocity_cms: float = Field(..., description="Forced convective airflow velocity (cm/s)")
+    fuel_thickness_mm: Optional[float] = Field(default=6.35)
+    question: str = Field(..., min_length=2, max_length=500, description="Scenario follow-up question")
+    previous_briefing: Optional[str] = Field(default=None, max_length=2500)
+
+
 def validate_supported_envelope(req: TelemetryRequest) -> List[str]:
     """Return list of out-of-envelope violations if inputs exceed supported experimental scope."""
     violations: List[str] = []
@@ -527,4 +535,111 @@ async def briefing_endpoint(req: TelemetryRequest) -> Dict[str, Any]:
             "briefing": fallback_text,
             "source": "local_fallback_error",
             "fallback_reason": str(exc),
+        }
+
+
+@app.post("/api/followup")
+async def followup_endpoint(req: FollowUpRequest) -> Dict[str, Any]:
+    telemetry = TelemetryRequest(
+        ambient_o2_percent=req.ambient_o2_percent,
+        flow_velocity_cms=req.flow_velocity_cms,
+        fuel_thickness_mm=req.fuel_thickness_mm,
+    )
+    violations = validate_supported_envelope(telemetry)
+    if violations:
+        return {
+            "status": "outside_supported_conditions",
+            "supported": False,
+            "reasons": violations,
+            "answer": (
+                f"Cabin sensor readings are outside the verified {O2_MIN}%-{O2_MAX}% O2 and "
+                f"{FLOW_MIN}-{FLOW_MAX} cm/s operating range. Adjust sensors back inside limits before asking scenario questions."
+            ),
+            "source": "envelope_guard",
+        }
+
+    score = compute_sustained_flame_score(req.ambient_o2_percent, req.flow_velocity_cms)
+    predicted_state = 1 if score >= 0.5 else 0
+    regime_info = classify_experimental_regime(score, req.flow_velocity_cms)
+
+    fallback_answer = (
+        f"At {req.ambient_o2_percent:.1f}% O2 and {req.flow_velocity_cms:.3f} cm/s airflow, "
+        f"the cabin is in the {regime_info['regime_label']}. {regime_info['physical_interpretation']} "
+        f"Keep local rack ventilation isolated, shut power to overheating gear, and check for hidden smoldering."
+    )
+
+    if not GROQ_API_KEY:
+        return {
+            "status": "supported",
+            "supported": True,
+            "flame_hazard_state": predicted_state,
+            "sustained_flame_score": score,
+            "answer": fallback_answer,
+            "source": "local_fallback_no_key",
+        }
+
+    system_prompt = (
+        "You are an onboard spacecraft fire-safety assistant answering a follow-up question "
+        "during an active cabin scenario. Keep your answer under 120 words, in plain everyday English.\n"
+        "Strict rules:\n"
+        "1. Stay strictly grounded in the provided cabin oxygen, airflow speed, and flame status.\n"
+        "2. Do NOT use markdown bolding (**) or bullet symbols that clutter plain text.\n"
+        "3. Do NOT cite research papers, NASA report numbers, PSI IDs, or machine learning terms.\n"
+        "4. Focus on practical microgravity fire physics (no buoyancy, fan-driven oxygen feed, invisible smoldering) and crew safety."
+    )
+
+    user_prompt = (
+        f"Cabin Oxygen: {req.ambient_o2_percent}%\n"
+        f"Cabin Airflow Speed: {req.flow_velocity_cms} cm/s\n"
+        f"Flame Status: {'SUSTAINED FLAME' if predicted_state == 1 else 'SELF-EXTINGUISHING'}\n"
+        f"Physical Regime: {regime_info['physical_interpretation']}\n"
+        f"Previous Briefing: {req.previous_briefing or 'None'}\n\n"
+        f"Follow-up Question: {req.question.strip()}"
+    )
+
+    payload = {
+        "model": QWEN_MODEL,
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ],
+        "temperature": 0.25,
+        "max_tokens": 450,
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.post(
+                "https://api.groq.com/openai/v1/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {GROQ_API_KEY}",
+                    "Content-Type": "application/json",
+                },
+                json=payload,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+
+        raw_content = ((data.get("choices") or [{}])[0].get("message") or {}).get("content", "")
+        content = re.sub(r"<think>.*?</think>", "", raw_content, flags=re.DOTALL).strip()
+        if not content:
+            raise ValueError("Empty LLM output")
+
+        return {
+            "status": "supported",
+            "supported": True,
+            "flame_hazard_state": predicted_state,
+            "sustained_flame_score": score,
+            "answer": content,
+            "source": f"groq:{QWEN_MODEL}",
+        }
+    except Exception as exc:
+        logger.error("Follow-up request failed (%s); serving fallback.", exc)
+        return {
+            "status": "supported",
+            "supported": True,
+            "flame_hazard_state": predicted_state,
+            "sustained_flame_score": score,
+            "answer": fallback_answer,
+            "source": "local_fallback_error",
         }
