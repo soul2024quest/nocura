@@ -42,10 +42,12 @@ export default function Story({onReady,onError,reduced,onEnter,onScenario,onEvid
    <div className="story-stage">
     <div className="story-grid" aria-hidden="true"/>
     <div className="story-topline"><span>NASA SPACE APPS CHALLENGE / 2026</span><span>FLAME IN FREEFALL <i/></span></div>
-    <div className="story-copy" key={chapter}>
-     <div className="eyebrow">{chapters[chapter].kicker}</div>
-     {chapter===0?<h1>{chapters[chapter].title}</h1>:<h2>{chapters[chapter].title}</h2>}
-     <p>{chapters[chapter].body}</p>
+    <div className="story-copy">
+     <div className="story-narrative">{chapters.map((item,index)=><div key={item.label} className={`story-chapter-copy${chapter===index?' is-active':''}`} aria-hidden={chapter!==index}>
+      <div className="eyebrow">{item.kicker}</div>
+      {index===0?<h1>{item.title}</h1>:<h2>{item.title}</h2>}
+      <p>{item.body}</p>
+     </div>)}</div>
      <button className="primary story-cta" onClick={onEnter}>Enter the laboratory <ArrowUpRight size={18}/></button>
      <div className="story-subnote">A research exploration tool. Not an onboard fire detector.</div>
     </div>
